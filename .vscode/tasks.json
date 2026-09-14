@@ -1,0 +1,83 @@
+{
+  "version": "2.0.0",
+  "inputs": [
+    {
+      "id": "esp32Fqbn",
+      "type": "promptString",
+      "description": "FQBN de la IdeaBoard (ajústalo si tu modelo de ESP32 es distinto)",
+      "default": "esp32:esp32:esp32"
+    },
+    {
+      "id": "serialPort",
+      "type": "promptString",
+      "description": "Puerto serial de la IdeaBoard",
+      "default": "/dev/ttyUSB0"
+    }
+  ],
+  "tasks": [
+    {
+      "label": "Rover: verificar configuración",
+      "type": "shell",
+      "command": "test -f rover_control/config.h",
+      "problemMatcher": [],
+      "detail": "Comprueba que config.h exista antes de compilar."
+    },
+    {
+      "label": "Rover: compilar",
+      "type": "shell",
+      "command": "arduino-cli",
+      "args": [
+        "compile",
+        "--fqbn",
+        "${input:esp32Fqbn}",
+        "rover_control"
+      ],
+      "dependsOn": "Rover: verificar configuración",
+      "dependsOrder": "sequence",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": "$gcc"
+    },
+    {
+      "label": "Rover: compilar y cargar",
+      "type": "shell",
+      "command": "arduino-cli",
+      "args": [
+        "compile",
+        "--upload",
+        "--fqbn",
+        "${input:esp32Fqbn}",
+        "--port",
+        "${input:serialPort}",
+        "rover_control"
+      ],
+      "dependsOn": "Rover: verificar configuración",
+      "dependsOrder": "sequence",
+      "group": "build",
+      "problemMatcher": "$gcc"
+    },
+    {
+      "label": "Rover: monitor serial (115200)",
+      "type": "shell",
+      "command": "arduino-cli",
+      "args": [
+        "monitor",
+        "--port",
+        "${input:serialPort}",
+        "--config",
+        "baudrate=115200"
+      ],
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "Vision: revisar contrato vigente",
+      "type": "shell",
+      "command": "git log -1 --format='%h%n%ci%n%s' -- vision-system/contrato && git status --short vision-system && git diff --stat -- vision-system/contrato",
+      "problemMatcher": [],
+      "detail": "Muestra la última revisión del contrato y cambios locales aún no confirmados."
+    }
+  ]
+}
