@@ -1,0 +1,96 @@
+#VRML_SIM R2025a utf8
+
+WorldInfo { basicTimeStep 32 }
+Viewpoint { orientation 1 0 0 -1.5708 position 0.43 1.35 0.43 }
+
+DEF BOARD Solid {
+  translation 0.43 -0.012 0.43
+  children [ Shape { appearance Appearance { material Material { diffuseColor 0.92 0.92 0.88 } } geometry Box { size 1 0.024 1 } } ]
+  name "physical_board_1000mm"
+}
+DEF CORNER_0 Solid {
+  translation 0 0.002 0
+  children [ Shape { appearance Appearance { texture ImageTexture { url [ "../assets/aruco/id0.png" ] } } geometry Box { size 0.14 0.004 0.14 } } ]
+  name "aruco_corner_0"
+}
+DEF CORNER_1 Solid {
+  translation 0.86 0.002 0
+  children [ Shape { appearance Appearance { texture ImageTexture { url [ "../assets/aruco/id1.png" ] } } geometry Box { size 0.14 0.004 0.14 } } ]
+  name "aruco_corner_1"
+}
+DEF CORNER_2 Solid {
+  translation 0.86 0.002 0.86
+  children [ Shape { appearance Appearance { texture ImageTexture { url [ "../assets/aruco/id2.png" ] } } geometry Box { size 0.14 0.004 0.14 } } ]
+  name "aruco_corner_2"
+}
+DEF CORNER_3 Solid {
+  translation 0 0.002 0.86
+  children [ Shape { appearance Appearance { texture ImageTexture { url [ "../assets/aruco/id3.png" ] } } geometry Box { size 0.14 0.004 0.14 } } ]
+  name "aruco_corner_3"
+}
+DEF DEPOT_GREEN Solid {
+  translation 0.43 0.002 0.075
+  children [ Shape { appearance Appearance { material Material { diffuseColor 0.1 0.65 0.16 transparency 0.35 } } geometry Box { size 0.2 0.004 0.15 } } ]
+  name "depot_green"
+}
+DEF DEPOT_RED Solid {
+  translation 0.785 0.002 0.43
+  children [ Shape { appearance Appearance { material Material { diffuseColor 0.8 0.08 0.08 transparency 0.35 } } geometry Box { size 0.15 0.004 0.2 } } ]
+  name "depot_red"
+}
+DEF DEPOT_BLUE Solid {
+  translation 0.43 0.002 0.785
+  children [ Shape { appearance Appearance { material Material { diffuseColor 0.05 0.2 0.9 transparency 0.35 } } geometry Box { size 0.2 0.004 0.15 } } ]
+  name "depot_blue"
+}
+DEF CUBE_GREEN Solid {
+  translation 0.52 0.035 0.20
+  children [ Shape { appearance Appearance { material Material { diffuseColor 0.1 0.7 0.15 } } geometry Box { size 0.06 0.06 0.06 } } ]
+  name "cube_green"
+}
+DEF CUBE_BLUE Solid {
+  translation 0.30 0.035 0.58
+  children [ Shape { appearance Appearance { material Material { diffuseColor 0.05 0.2 0.95 } } geometry Box { size 0.06 0.06 0.06 } } ]
+  name "cube_blue"
+}
+DEF CUBE_RED Solid {
+  translation 0.66 0.035 0.52
+  children [ Shape { appearance Appearance { material Material { diffuseColor 0.9 0.05 0.05 } } geometry Box { size 0.06 0.06 0.06 } } ]
+  name "cube_red"
+}
+DEF ROVER_10 Robot {
+  translation 0.08 0.035 0.35
+  rotation 0 1 0 -1.5708
+  name "rover_10"
+  controller "rover_agent"
+  children [
+    Shape { appearance Appearance { material Material { diffuseColor 0.08 0.08 0.08 } } geometry Box { size 0.12 0.055 0.10 } }
+    Transform { translation 0 0.031 0 children [ Shape { appearance Appearance { texture ImageTexture { url [ "../assets/aruco/id10.png" ] } } geometry Box { size 0.05 0.003 0.05 } } ] }
+    Transform { translation 0.068 0.015 0.032 children [ Shape { appearance Appearance { material Material { diffuseColor 0.75 0.75 0.75 } } geometry Box { size 0.018 0.02 0.012 } } ] }
+    Transform { translation 0.068 0.015 -0.032 children [ Shape { appearance Appearance { material Material { diffuseColor 0.75 0.75 0.75 } } geometry Box { size 0.018 0.02 0.012 } } ] }
+  ]
+}
+DEF ROVER_11 Robot {
+  translation 0.08 0.035 0.51
+  rotation 0 1 0 -1.5708
+  name "rover_11"
+  controller "rover_agent"
+  children [
+    Shape { appearance Appearance { material Material { diffuseColor 0.08 0.08 0.08 } } geometry Box { size 0.12 0.055 0.10 } }
+    Transform { translation 0 0.031 0 children [ Shape { appearance Appearance { texture ImageTexture { url [ "../assets/aruco/id11.png" ] } } geometry Box { size 0.05 0.003 0.05 } } ] }
+    Transform { translation 0.068 0.015 0.032 children [ Shape { appearance Appearance { material Material { diffuseColor 0.75 0.75 0.75 } } geometry Box { size 0.018 0.02 0.012 } } ] }
+    Transform { translation 0.068 0.015 -0.032 children [ Shape { appearance Appearance { material Material { diffuseColor 0.75 0.75 0.75 } } geometry Box { size 0.018 0.02 0.012 } } ] }
+  ]
+}
+DEF VISION_SUPERVISOR Robot {
+  supervisor TRUE
+  controller "vision_supervisor"
+  name "vision_supervisor"
+  children [
+    Transform {
+      translation 0.43 1.35 0.43
+      rotation 1 0 0 -1.5708
+      children [ Camera { name "overhead_camera" width 1280 height 1280 fieldOfView 0.85 } ]
+    }
+  ]
+}

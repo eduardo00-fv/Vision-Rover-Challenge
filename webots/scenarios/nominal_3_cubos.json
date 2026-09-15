@@ -1,0 +1,14 @@
+{
+  "id": "nominal_3_cubos",
+  "description": "Escenario nominal reproducible: tres cubos y patologías declaradas por el contrato.",
+  "contract_config": "../../vision-system/contrato/config_simulador.json",
+  "expected": {
+    "required_deliveries": ["green", "blue", "red"],
+    "allow_rover_contact": false
+  },
+  "oracle": {
+    "rover_length_mm": 120.0,
+    "rover_width_mm": 100.0,
+    "minimum_clearance_mm": 20.0
+  }
+}
