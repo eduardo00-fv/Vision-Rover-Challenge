@@ -42,6 +42,13 @@ Una ronda aprueba si, antes de `FINISHED`, se cumplen todas estas condiciones:
    reserva activa sobre el mismo cubo.
 6. El informe se puede reproducir con la misma semilla y configuración.
 
+Entre corridas que cumplen estas condiciones, el criterio de orden es el menor
+`completion_ms` del reloj oficial. Una corrida con una falta crítica o una
+entrega incompleta no tiene tiempo clasificable: es `FAIL`, aunque haya
+terminado antes. El escenario debe declarar `physics_calibrated: true` antes de
+que una misión completa y segura pueda ser `PASS`; mientras sea `false`, queda
+como `INCONCLUSIVE` con su tiempo registrado, nunca como aprobación engañosa.
+
 Una entrega visual no basta: el oráculo calculará la inclusión geométrica
 conservadora ya definida por el contrato. Un cubo que toca o sobresale de un
 borde no es una entrega.

@@ -5,6 +5,7 @@ from pathlib import Path
 from run_log import RunLog
 from scenario import load_scenario
 from safety_oracle import evaluate as evaluate_safety
+from run_verdict import evaluate as evaluate_verdict
 from vision_adapter import VisionAdapter, webots_bgra_to_bgr
 
 STEP = 32
@@ -66,16 +67,18 @@ def reset_world():
     """Restablece la verdad física desde el escenario y limpia observaciones."""
     for rover in rovers:
         initial = rover["initial"]
-        rover["t"].setSFVec3f([initial["col"] * CELL, .035, initial["row"] * CELL])
-        rover["r"].setSFRotation([0, 1, 0, math.radians(initial["theta"]) - math.pi / 2])
+        rover["t"].setSFVec3f([initial["col"] * CELL, initial["row"] * CELL, .0525])
+        rover["r"].setSFRotation([0, 0, 1, -math.radians(initial["theta"])])
+        rover["node"].resetPhysics()
         rover["node"].getField("customData").setSFString("0,0")
         rover["last"], rover["age"] = None, 0
     for cube in cubes:
         initial = cube["initial"]
-        cube["t"].setSFVec3f([initial["col"] * CELL, .035, initial["row"] * CELL])
+        cube["t"].setSFVec3f([initial["col"] * CELL, initial["row"] * CELL, .035])
+        cube["node"].resetPhysics()
         cube["last"], cube["age"] = [initial["col"], initial["row"]], 0
     for depot, translation in depot_nodes:
-        translation.setSFVec3f([depot["col"] * CELL, .002, depot["row"] * CELL])
+        translation.setSFVec3f([depot["col"] * CELL, depot["row"] * CELL, .002])
 
 reset_world()
 
@@ -90,7 +93,7 @@ def truth():
     for cube in cubes:
         position = cube["t"].getSFVec3f()
         truth_cubes.append({"color": cube["color"], "col": position[0] / CELL,
-                            "row": position[2] / CELL})
+                            "row": position[1] / CELL})
     return {"rovers": truth_rovers, "cubes": truth_cubes}
 
 def deliveries_from_truth():
@@ -110,29 +113,8 @@ def deliveries_from_truth():
 
 def pose(rover):
     p, rot = rover["t"].getSFVec3f(), rover["r"].getSFRotation()
-    theta = (math.degrees(rot[3] + math.pi / 2) % 360)
-    return p[0] / CELL, p[2] / CELL, theta
-
-def update_rover(rover, dt):
-    try: left, right = (float(v) for v in rover["node"].getField("customData").getSFString().split(","))
-    except ValueError: left = right = 0
-    left, right = max(-1, min(1, left)), max(-1, min(1, right))
-    col, row, theta = pose(rover)
-    theta = (theta + (right - left) * cfg["giro_rover_grados_s"] * dt) % 360
-    speed_cells_s = (left + right) * .5 * cfg["velocidad_rover_celdas_s"]
-    col = min(grid["cols"] - 2, max(2, col + math.cos(math.radians(theta)) * speed_cells_s * dt))
-    row = min(grid["rows"] - 2, max(2, row - math.sin(math.radians(theta)) * speed_cells_s * dt))
-    rover["t"].setSFVec3f([col * CELL, .035, row * CELL]); rover["r"].setSFRotation([0, 1, 0, math.radians(theta) - math.pi / 2])
-    # Empuje simplificado con las paletas: arrastra un cubo frente al rover.
-    for cube in cubes:
-        cp = cube["t"].getSFVec3f(); dc, dr = cp[0] / CELL - col, cp[2] / CELL - row
-        if math.hypot(dc, dr) < patologias["radio_empuje_celdas"] and speed_cells_s > 0:
-            margin = cfg["cube_side"] * CELL / 2
-            cube["t"].setSFVec3f([
-                min(grid["cols"] * CELL - margin, max(margin, cp[0] + math.cos(math.radians(theta)) * speed_cells_s * CELL * dt)),
-                .035,
-                min(grid["rows"] * CELL - margin, max(margin, cp[2] - math.sin(math.radians(theta)) * speed_cells_s * CELL * dt)),
-            ])
+    theta = (-math.degrees(rot[3]) % 360)
+    return p[0] / CELL, p[1] / CELL, theta
 
 def clock():
     """El reloj es del Arbitro de visión, no del tiempo de Webots."""
@@ -144,6 +126,10 @@ def observation():
     """Telemetría que sale de la imagen, nunca de la verdad del Supervisor."""
     global seq
     seq += 1
+    dump_path = os.environ.get("VRC_CAMERA_DUMP")
+    dump_seq = int(os.environ.get("VRC_CAMERA_DUMP_SEQ", "1"))
+    if dump_path and seq == dump_seq:
+        overhead_camera.saveImage(dump_path, 100)
     image = webots_bgra_to_bgr(overhead_camera.getImage(), overhead_camera.getWidth(),
                                 overhead_camera.getHeight())
     current_phase, current_clock = referee.instantanea()
@@ -152,8 +138,9 @@ def observation():
                      "total_ms": current_clock.total_ms}
     message = vision_adapter.observe(image, int(time.time() * 1000), current_phase,
                                       current_clock, seq)
-    # El árbitro solo avanza tras una geometría que el pipeline pudo construir.
-    # Así READY no se consume a ciegas y RUNNING cierra si la visión se pierde.
+    # El árbitro solo avanza tras procesar este cuadro. Así la transición usa
+    # geometría actual, no el resultado (posiblemente obsoleto) del cuadro
+    # anterior.
     referee.tictac(vision_adapter.last_error is None)
     return message
 
@@ -174,8 +161,6 @@ while sup.step(STEP) != -1:
     if command is not None:
         run_log.write("phase_request", ts_ms=int(time.time() * 1000), command=command,
                       result=referee.intentar(command))
-    if referee.fase == "RUNNING":
-        for rover in rovers: update_rover(rover, STEP / 1000)
     try:
         while True: clients.append(server.accept()[0]); clients[-1].setblocking(False)
     except BlockingIOError: pass
@@ -198,15 +183,14 @@ while sup.step(STEP) != -1:
     if phase != previous_phase:
         run_log.write("phase", ts_ms=int(time.time() * 1000), phase=phase, clock=clock())
     if phase == "FINISHED" and not summary_written:
-        status = "FAIL" if critical_failures else "INCONCLUSIVE"
-        reason = ("; ".join(sorted(critical_failures)) if critical_failures else
-                  "Falta física calibrada y control de rover real para emitir PASS.")
+        deliveries = deliveries_from_truth()
+        verdict = evaluate_verdict(scenario["expected"], deliveries, sorted(critical_failures),
+                                   clock()["elapsed_ms"], scenario["physics_calibrated"])
         run_log.close(
-            status=status,
-            reason=reason,
+            **verdict,
             phase=phase,
             clock=clock(),
-            deliveries=deliveries_from_truth(),
+            deliveries=deliveries,
             safety_failures=sorted(critical_failures),
         )
         summary_written = True

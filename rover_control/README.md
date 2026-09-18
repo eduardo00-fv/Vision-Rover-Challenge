@@ -6,16 +6,21 @@ Base de control para cada CenfoBot. Esta primera entrega implementa:
 - Cliente TCP no bloqueante al puerto oficial `2026`.
 - Reconstrucción de NDJSON: una línea JSON por mensaje.
 - Validación de telemetría v2 y actualización atómica de `WorldState`.
-- FSM mínima que entra en parada segura con visión vieja, ausencia de pose propia
-  o ronda finalizada.
+- Control diferencial de los motores N20, sin encoders.
+- Navegación visual en lazo cerrado: cada PWM se recalcula desde la pose fresca
+  de la cámara, sin integrar distancia local.
+- Lectura de cuatro sensores de línea, ultrasónico y color reflectivo.
+- FSM mínima que entra en parada segura con visión vieja, pose propia vencida o
+  ronda finalizada.
 
-No controla motores todavía. Esa capa se agregará tras medir la electrónica y
-calibrar ambos rovers.
+El control físico todavía requiere calibrar sentido de ruedas, PWM mínimo y
+márgenes de aproximación en ambos rovers antes de usarlo en una ronda.
 
 ## Preparación
 
 1. Instalar **esp32 by Espressif Systems** en Arduino IDE.
-2. Instalar la biblioteca **ArduinoJson** desde el administrador de bibliotecas.
+2. Instalar las bibliotecas **ArduinoJson** y **FastLED** desde el administrador
+   de bibliotecas.
 3. Copiar `config.example.h` como `config.h`.
 4. Configurar el hotspot, IP de la laptop y `ROVER_ID` (`10` o `11`).
 5. Abrir `rover_control.ino`, elegir la placa/puerto del IdeaBoard y cargar.
@@ -33,8 +38,39 @@ externas:
 - `safety_supervisor.*` es la autoridad que permite o bloquea movimiento.
 - `mission_controller.*` traduce las fases oficiales a estados de misión.
 
-Los próximos módulos serán `motor_controller`, `sensors` y `navigator`. Ningún
-módulo podrá emitir PWM sin que `safety_supervisor` haya autorizado movimiento.
+`motor_controller`, `sensors` y `vision_navigator` completan la capa local.
+Ningún módulo podrá emitir PWM sin que `safety_supervisor` haya autorizado
+movimiento.
+
+## Núcleo portable de navegación
+
+[`rover_logic_core.h`](rover_logic_core.h) y
+[`rover_logic_core.cpp`](rover_logic_core.cpp) contienen la geometría de
+aproximación/empuje y el criterio de entrega sin depender de Arduino, Wi-Fi ni
+Webots. Es la pieza que se reutilizará en el controlador de simulación y que el
+adaptador del firmware consumirá después. La regla de depósito usa la media
+diagonal del cubo, igual que el contrato v2.
+
+Se puede verificar sin placa ni IDE:
+
+```bash
+g++ -std=c++17 rover_logic_core.cpp tests/test_rover_logic_core.cpp -o /tmp/test_rover_logic_core
+/tmp/test_rover_logic_core
+```
+
+## Cableado definido por el firmware
+
+| Componente | GPIO |
+| --- | --- |
+| Motor izquierdo | M1 interno: 12 / 14 |
+| Motor derecho | M2 interno: 13 / 15 |
+| Línea (frente izq., frente der., atrás izq., atrás der.) | 36, 39, 34, 35 |
+| Ultrasónico | TRIG 25, ECHO 26 |
+| Color reflectivo | NeoPixel iluminador 4, analógico 32 |
+
+El pin `ECHO` de un HC-SR04 típico es de 5 V: use un divisor de voltaje antes
+de GPIO26, que es de 3.3 V. Antes de cargar cada rover, ajuste `ROVER_ID`,
+`ROVER_TARGET_COLOR` y los cuatro umbrales de línea en `config.h`.
 
 ### Contrato de visión que consume
 
@@ -78,9 +114,28 @@ el puerto suele ser `/dev/ttyUSB0` o `/dev/ttyACM0`.
 3. Abrir el monitor serial a 115200 baud. Deben aparecer conexión Wi‑Fi/TCP,
    la pose del rover configurado y contadores de mensajes.
 
+## Banco de motores sin cámara
+
+Para una prueba mecánica aislada, en una copia local de `config.h` cambie
+`VRC_ENABLE_MOTOR_BENCH` a `1` y cargue **el mismo** `rover_control.ino`. Este
+modo no inicia Wi-Fi, visión ni misión; solo habilita el motor después de
+escribir `ARM` en el monitor serial. Cada orden queda limitada a ±35 % PWM y
+1500 ms:
+
+```text
+ARM
+MOTOR 20 20 300      # avance breve
+MOTOR 20 -20 300     # giro breve
+STOP
+DISARM
+```
+
+Pruebe un rover a la vez, con espacio libre y una persona lista para cortar
+alimentación. Vuelva `VRC_ENABLE_MOTOR_BENCH` a `0` antes de cualquier ensayo
+con visión.
+
 ## Regla de seguridad actual
 
-El programa no enviará movimiento porque aún no hay driver de motores. Cuando se
-incorpore, deberá conservar `SAFE_STOP`: si no hay una foto válida de visión de
-menos de 1500 ms, si el rover propio no aparece o si la ronda terminó, los
-motores se detienen.
+Fuera del modo de banco, el programa conserva `SAFE_STOP`: si no hay una foto
+válida de visión de menos de 1500 ms, si el rover propio no aparece o si la
+ronda terminó, los motores se detienen.

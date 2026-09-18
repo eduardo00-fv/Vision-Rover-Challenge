@@ -28,4 +28,14 @@ def load_scenario(path):
     for key in ("rover_length_mm", "rover_width_mm"):
         if not isinstance(oracle.get(key), (int, float)) or oracle[key] <= 0:
             raise ValueError("scenario: oracle.{} debe ser un número > 0".format(key))
+    expected = scenario.get("expected", {})
+    required_deliveries = expected.get("required_deliveries")
+    colors = {cube["color"] for cube in config["cubes"]}
+    if (not isinstance(required_deliveries, list) or not required_deliveries or
+            any(not isinstance(color, str) for color in required_deliveries) or
+            len(set(required_deliveries)) != len(required_deliveries) or
+            not set(required_deliveries).issubset(colors)):
+        raise ValueError("scenario: expected.required_deliveries debe listar cubos configurados, sin repetir")
+    if not isinstance(scenario.get("physics_calibrated"), bool):
+        raise ValueError("scenario: physics_calibrated debe ser booleano")
     return scenario, config

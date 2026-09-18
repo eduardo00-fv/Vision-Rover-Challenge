@@ -10,6 +10,7 @@ enum class SafetyReason : uint8_t {
   OK,
   NO_TELEMETRY,
   ROVER_NOT_VISIBLE,
+  ROVER_POSE_STALE,
   ROUND_FINISHED,
   UNKNOWN_PHASE,
 };
@@ -23,7 +24,8 @@ class SafetySupervisor {
  public:
   explicit SafetySupervisor(uint32_t max_world_age_ms) : max_world_age_ms_(max_world_age_ms) {}
 
-  SafetyDecision evaluate(const WorldState& world, uint8_t rover_id) const;
+  SafetyDecision evaluate(const WorldState& world, uint8_t rover_id,
+                          uint32_t max_pose_age_ms) const;
   const char* reasonName(SafetyReason reason) const;
 
  private:

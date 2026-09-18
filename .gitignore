@@ -1,0 +1,5 @@
+# Configuración local y artefactos de compilación del ESP32.
+rover_control/config.h
+rover_control/AttaBot/build/
+rover_control/AttaBot/__pycache__/
+*.okular

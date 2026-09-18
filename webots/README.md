@@ -45,6 +45,10 @@ las entregas evaluadas mediante la geometría oficial. Mientras no exista el
 oráculo de contactos y límites, el resultado se declara `INCONCLUSIVE`, nunca
 un `PASS` engañoso.
 
+La clasificación compara únicamente corridas completas y sin faltas: gana el
+menor `completion_ms` del reloj oficial. Una entrega requerida ausente es
+`FAIL`, igual que una colisión o salida de cancha; no recibe un tiempo válido.
+
 El oráculo actual usa el rectángulo orientado de cada chasis, con dimensiones y
 distancia preventiva declaradas por escenario. Contacto rover--rover o salida
 de cancha son `FAIL` automáticos y quedan registrados en la traza. Una corrida
@@ -73,3 +77,17 @@ make -C controllers/rover_agent
 
 Si no existe `librover_logic.so`, el controlador no arranca: es intencional,
 para no volver silenciosamente a una estrategia Python distinta de la del rover.
+
+## Física del modelo
+
+El mundo usa el mismo convenio de física que `AttaBot-Sim`: Webots `ENU`
+(cancha en X--Y y altura Z), tracción diferencial con dos ruedas motrices de
+alta fricción y dos castors de baja fricción. El `Supervisor` no traslada
+rovers ni cubos durante una ronda; las ruedas, los contactos y la gravedad son
+la única fuente de movimiento. Las dimensiones del chasis y las paletas siguen
+siendo las del Vision Rover Challenge.
+
+La prueba de banco opcional `VRC_ACTUATOR_TEST=izquierda,derecha` aplica un
+mando fijo normalizado para medir avance, giro y frenado en una traza. Es un
+modo de calibración aislado: no habilita resultados de misión ni cambia el
+control normal.

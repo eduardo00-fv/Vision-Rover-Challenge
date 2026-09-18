@@ -6,6 +6,7 @@
     "required_deliveries": ["green", "blue", "red"],
     "allow_rover_contact": false
   },
+  "physics_calibrated": false,
   "oracle": {
     "rover_length_mm": 120.0,
     "rover_width_mm": 100.0,
