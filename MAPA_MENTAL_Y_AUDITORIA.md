@@ -1,5 +1,8 @@
 # Mapa mental y auditoría general — Vision Rover Challenge
 
+Estado y prioridades actuales: [PLAN_ACTUAL.md](PLAN_ACTUAL.md).
+La auditoría siguiente se conserva como registro del 12/09.
+
 > Auditoría documental y estática realizada el 12 de septiembre de 2026 sobre
 > `main` en `cb66591`. No sustituye una prueba de cancha con los dos rovers
 > físicos, la cámara y la red oficial.
