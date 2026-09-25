@@ -16,6 +16,7 @@ scenario, cfg = load_scenario(scenario_path)
 sys.path.insert(0, str(root / "vision-system"))
 from contrato.schema import cubo_en_depot, geometria_depot
 from vision.sistema import Arbitro
+from vision.reglas.acopio import ContadorAcopio
 
 CELL = cfg["grid"]["cell_mm"] / 1000
 grid = {"cols": cfg["grid"]["cols"], "rows": cfg["grid"]["rows"], "cell_mm": cfg["grid"]["cell_mm"]}
@@ -34,9 +35,11 @@ if (vision_adapter.cfg.tablero.cols, vision_adapter.cfg.tablero.rows,
 server = socket.socket(); server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); server.bind(("0.0.0.0", 2026)); server.listen(); server.setblocking(False)
 clients, seq, last_pub = [], 0, 0.0
 referee = Arbitro(vision_adapter.cfg, "IDLE")
+counter = ContadorAcopio(vision_adapter.cfg)
 run_log = RunLog(os.environ.get("VRC_RUN_DIR", "/tmp/vision-rover-webots"), scenario, cfg)
 summary_written = False
 critical_failures = set()
+official_completion = False
 
 def node_for(def_name):
     node = sup.getFromDef(def_name)
@@ -75,6 +78,7 @@ def reset_world():
     for cube in cubes:
         initial = cube["initial"]
         cube["t"].setSFVec3f([initial["col"] * CELL, initial["row"] * CELL, .035])
+        cube["r"].setSFRotation([0, 0, 1, 0])
         cube["node"].resetPhysics()
         cube["last"], cube["age"] = [initial["col"], initial["row"]], 0
     for depot, translation in depot_nodes:
@@ -112,8 +116,9 @@ def deliveries_from_truth():
     return results
 
 def pose(rover):
-    p, rot = rover["t"].getSFVec3f(), rover["r"].getSFRotation()
-    theta = (-math.degrees(rot[3]) % 360)
+    p = rover["t"].getSFVec3f()
+    orientation = rover["node"].getOrientation()
+    theta = -math.degrees(math.atan2(orientation[3], orientation[0])) % 360
     return p[0] / CELL, p[1] / CELL, theta
 
 def clock():
@@ -124,7 +129,7 @@ def clock():
 
 def observation():
     """Telemetría que sale de la imagen, nunca de la verdad del Supervisor."""
-    global seq
+    global seq, official_completion
     seq += 1
     dump_path = os.environ.get("VRC_CAMERA_DUMP")
     dump_seq = int(os.environ.get("VRC_CAMERA_DUMP_SEQ", "1"))
@@ -142,6 +147,11 @@ def observation():
     # geometría actual, no el resultado (posiblemente obsoleto) del cuadro
     # anterior.
     referee.tictac(vision_adapter.last_error is None)
+    if vision_adapter.last_error is None:
+        state = vision_adapter.last_state
+        delivery = counter.actualizar(state, state.ts_ms)
+        if referee.observar_reto(delivery.completo, delivery.instante_completo):
+            official_completion = True
     return message
 
 while sup.step(STEP) != -1:
@@ -149,7 +159,6 @@ while sup.step(STEP) != -1:
     key = keyboard.getKey()
     command = None
     if key in (ord("R"), ord("r")):
-        reset_world()
         command = "ready"
     elif key in (ord("I"), ord("i")):
         command = "abort"
@@ -159,8 +168,19 @@ while sup.step(STEP) != -1:
         run_log.write("phase_request_rejected", ts_ms=int(time.time() * 1000),
                       command="start", reason="RUNNING solo lo inicia el Arbitro al vencer READY")
     if command is not None:
+        result = referee.intentar(command)
+        if command == "ready" and "-> READY" in result:
+            run_log.close(status="INCONCLUSIVE", reason="Nueva preparación")
+            run_log = RunLog(os.environ.get("VRC_RUN_DIR", "/tmp/vision-rover-webots"), scenario, cfg)
+            summary_written = False
+            official_completion = False
+            critical_failures.clear()
+            counter = ContadorAcopio(vision_adapter.cfg)
+            vision_adapter = VisionAdapter(root / "vision-system/vision/config_vision.json",
+                overhead_camera.getWidth(), overhead_camera.getHeight(), overhead_camera.getFov())
+            reset_world()
         run_log.write("phase_request", ts_ms=int(time.time() * 1000), command=command,
-                      result=referee.intentar(command))
+                      result=result)
     try:
         while True: clients.append(server.accept()[0]); clients[-1].setblocking(False)
     except BlockingIOError: pass
@@ -169,7 +189,8 @@ while sup.step(STEP) != -1:
         truth_state = truth()
         safety = evaluate_safety(truth_state, grid, **scenario["oracle"])
         new_failures = set(safety["failures"]) - critical_failures
-        critical_failures.update(safety["failures"])
+        if previous_phase == "RUNNING":
+            critical_failures.update(safety["failures"])
         for failure in sorted(new_failures):
             run_log.write("safety_failure", ts_ms=message["ts_ms"], failure=failure, truth=truth_state)
         run_log.write("sample", telemetry=message, truth=truth_state, safety=safety,
@@ -185,12 +206,16 @@ while sup.step(STEP) != -1:
     if phase == "FINISHED" and not summary_written:
         deliveries = deliveries_from_truth()
         verdict = evaluate_verdict(scenario["expected"], deliveries, sorted(critical_failures),
-                                   clock()["elapsed_ms"], scenario["physics_calibrated"])
+                                   clock()["elapsed_ms"], scenario["physics_calibrated"],
+                                   official_completion=official_completion)
         run_log.close(
             **verdict,
             phase=phase,
             clock=clock(),
             deliveries=deliveries,
+            official_completion=official_completion,
             safety_failures=sorted(critical_failures),
         )
         summary_written = True
+
+run_log.close(status="INCONCLUSIVE", reason="Webots terminó antes de cerrar la ronda")

@@ -8,7 +8,9 @@ Abra `worlds/vision_rover_challenge.wbt` con Webots. El servidor queda en
 `0.0.0.0:2026`; el ESP32 puede conectarse usando la IP de esa computadora.
 
 La tecla `R` reinicia el mundo y solicita `READY` al árbitro de visión; solo se
-acepta cuando la cámara ya ve la cancha. `F` solicita detener una ronda en
+acepta desde `IDLE` o `FINISHED` cuando la cámara ya ve la cancha; una petición
+rechazada no mueve los objetos. Cada preparación aceptada inicia una traza
+independiente. `F` solicita detener una ronda en
 curso e `I` aborta preparación. `S` no inicia una ronda: `READY → RUNNING` lo
 decide exclusivamente el reloj del árbitro.
 
@@ -41,9 +43,9 @@ Cada ejecución escribe un NDJSON en `/tmp/vision-rover-webots` por defecto. El
 archivo incluye metadatos, telemetría publicada, comandos y verdad física como
 oráculo; esta última no se entrega a los rovers. Cambie el destino con
 `VRC_RUN_DIR=/ruta/de/salidas`. Al terminar la ronda se agrega un resumen con
-las entregas evaluadas mediante la geometría oficial. Mientras no exista el
-oráculo de contactos y límites, el resultado se declara `INCONCLUSIVE`, nunca
-un `PASS` engañoso.
+las entregas evaluadas mediante la geometría oficial. El contador oficial
+verifica la permanencia y comunica el cumplimiento al árbitro. Sin ese cierre
+oficial, la geometría final por sí sola no aprueba una ronda.
 
 La clasificación compara únicamente corridas completas y sin faltas: gana el
 menor `completion_ms` del reloj oficial. Una entrega requerida ausente es
@@ -52,8 +54,8 @@ menor `completion_ms` del reloj oficial. Una entrega requerida ausente es
 El oráculo actual usa el rectángulo orientado de cada chasis, con dimensiones y
 distancia preventiva declaradas por escenario. Contacto rover--rover o salida
 de cancha son `FAIL` automáticos y quedan registrados en la traza. Una corrida
-sin esos incidentes sigue siendo `INCONCLUSIVE` hasta que visión y física estén
-en el lazo.
+sin esos incidentes y con el reto confirmado sigue siendo `INCONCLUSIVE`
+mientras la física no esté calibrada.
 
 ## Cámara y marcadores
 
@@ -80,7 +82,7 @@ para no volver silenciosamente a una estrategia Python distinta de la del rover.
 
 ## Física del modelo
 
-El mundo usa el mismo convenio de física que `AttaBot-Sim`: Webots `ENU`
+El mundo de esta competencia usa Webots `ENU`
 (cancha en X--Y y altura Z), tracción diferencial con dos ruedas motrices de
 alta fricción y dos castors de baja fricción. El `Supervisor` no traslada
 rovers ni cubos durante una ronda; las ruedas, los contactos y la gravedad son

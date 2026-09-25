@@ -82,7 +82,8 @@ DEF ROVER_10 Robot {
   controller "rover_agent"
   children [
     Shape { appearance Appearance { material Material { diffuseColor 0.08 0.08 0.08 } } geometry Box { size 0.12 0.10 0.055 } }
-    Transform { translation 0 0 0.031 children [ Shape { appearance Appearance { texture ImageTexture { url [ "../assets/aruco/id10.png" ] } } geometry Box { size 0.05 0.05 0.003 } } ] }
+    # El borde superior del ArUco apunta al frente del chasis (+X).
+    Transform { translation 0 0 0.031 rotation 0 0 1 -1.57079632679 children [ Shape { appearance Appearance { texture ImageTexture { url [ "../assets/aruco/id10.png" ] } } geometry Box { size 0.05 0.05 0.003 } } ] }
     Transform { translation 0.068 0.032 0.015 children [ Shape { appearance Appearance { material Material { diffuseColor 0.75 0.75 0.75 } } geometry Box { size 0.018 0.012 0.02 } } ] }
     Transform { translation 0.068 -0.032 0.015 children [ Shape { appearance Appearance { material Material { diffuseColor 0.75 0.75 0.75 } } geometry Box { size 0.018 0.012 0.02 } } ] }
     HingeJoint {
@@ -131,7 +132,8 @@ DEF ROVER_11 Robot {
   controller "rover_agent"
   children [
     Shape { appearance Appearance { material Material { diffuseColor 0.08 0.08 0.08 } } geometry Box { size 0.12 0.10 0.055 } }
-    Transform { translation 0 0 0.031 children [ Shape { appearance Appearance { texture ImageTexture { url [ "../assets/aruco/id11.png" ] } } geometry Box { size 0.05 0.05 0.003 } } ] }
+    # El borde superior del ArUco apunta al frente del chasis (+X).
+    Transform { translation 0 0 0.031 rotation 0 0 1 -1.57079632679 children [ Shape { appearance Appearance { texture ImageTexture { url [ "../assets/aruco/id11.png" ] } } geometry Box { size 0.05 0.05 0.003 } } ] }
     Transform { translation 0.068 0.032 0.015 children [ Shape { appearance Appearance { material Material { diffuseColor 0.75 0.75 0.75 } } geometry Box { size 0.018 0.012 0.02 } } ] }
     Transform { translation 0.068 -0.032 0.015 children [ Shape { appearance Appearance { material Material { diffuseColor 0.75 0.75 0.75 } } geometry Box { size 0.018 0.012 0.02 } } ] }
     HingeJoint {

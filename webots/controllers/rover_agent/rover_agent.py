@@ -1,6 +1,6 @@
 """Cliente de referencia del contrato v2; no usa la pose real de Webots."""
 from controller import Robot
-import json, os, socket, time
+import json, os, socket, time, copy
 from rover_logic import assigned_color, navigate, should_yield
 
 STEP = 32
@@ -25,7 +25,9 @@ def bench_command():
         raise RuntimeError("VRC_ACTUATOR_TEST debe ser izquierda,derecha") from exc
     return max(-1.0, min(1.0, left)), max(-1.0, min(1.0, right))
 class Feed:
-    def __init__(self): self.sock = None; self.buf = b""; self.world = None; self.retry = 0
+    def __init__(self):
+        self.sock = None; self.buf = b""; self.world = None; self.retry = 0
+        self.received = 0.0
     def poll(self):
         if self.sock is None and time.monotonic() >= self.retry:
             self.retry = time.monotonic() + 1
@@ -39,13 +41,27 @@ class Feed:
                 if not data: raise OSError()
                 self.buf += data
         except BlockingIOError: pass
-        except OSError: self.sock.close(); self.sock = None; return
+        except OSError:
+            self.sock.close(); self.sock = None; self.world = None; self.buf = b""; return
         while b"\n" in self.buf:
             line, self.buf = self.buf.split(b"\n", 1)
             try:
                 candidate = json.loads(line)
-                if candidate.get("v") == 2: self.world = candidate
+                if candidate.get("v") == 2:
+                    if self.world and (candidate["seq"] <= self.world["seq"] or candidate["ts_ms"] <= self.world["ts_ms"]):
+                        continue
+                    self.world = candidate
+                    self.received = time.monotonic()
             except ValueError: pass
+
+    def snapshot(self):
+        if self.world is None: return None
+        elapsed = int((time.monotonic() - self.received) * 1000)
+        if elapsed > 1500: return None
+        world = copy.deepcopy(self.world)
+        for group in ("rovers", "cubes"):
+            for item in world[group]: item["age_ms"] += elapsed
+        return world
 
 def control(world, rover_id, color, pushing):
     return navigate(world, rover_id, color, pushing)
@@ -58,11 +74,15 @@ for motor in (left_motor, right_motor):
     motor.setPosition(float("inf"))
     motor.setVelocity(0.0)
 pushing = False
+previous_target = None
 while robot.step(STEP) != -1:
     feed.poll()
-    target = assigned_color(feed.world, rover_id)
-    left, right, pushing = control(feed.world, rover_id, target, pushing) if target else (0, 0, False)
-    if should_yield(feed.world, rover_id):
+    world = feed.snapshot()
+    target = assigned_color(world, rover_id)
+    if target != previous_target: pushing = False
+    previous_target = target
+    left, right, pushing = control(world, rover_id, target, pushing) if target else (0, 0, False)
+    if should_yield(world, rover_id):
         left, right, pushing = 0, 0, False
     if test_command is not None:
         left, right = test_command

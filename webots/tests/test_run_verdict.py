@@ -27,9 +27,14 @@ class RunVerdictTest(unittest.TestCase):
         self.assertIsNone(result["completion_ms"])
 
     def test_complete_safe_run_records_official_time(self):
-        result = evaluate(EXPECTED, DELIVERED, [], 12345)
+        result = evaluate(EXPECTED, DELIVERED, [], 12345, official_completion=True)
         self.assertEqual(result["status"], "INCONCLUSIVE")
         self.assertEqual(result["completion_ms"], 12345)
+
+    def test_geometry_alone_cannot_pass_after_timeout_or_manual_stop(self):
+        result = evaluate(EXPECTED, DELIVERED, [], 12345, physics_calibrated=True)
+        self.assertEqual(result["status"], "FAIL")
+        self.assertIsNone(result["completion_ms"])
 
 
 if __name__ == "__main__":

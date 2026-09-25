@@ -6,7 +6,8 @@ calibrada, una corrida correcta es evidencia útil pero no un ``PASS``.
 """
 
 
-def evaluate(expected, deliveries, safety_failures, elapsed_ms, physics_calibrated=False):
+def evaluate(expected, deliveries, safety_failures, elapsed_ms, physics_calibrated=False,
+             official_completion=False):
     """Devuelve el resultado, la causa y los datos para ordenar corridas."""
     required = expected["required_deliveries"]
     missing = [color for color in required if not deliveries.get(color, {}).get("delivered", False)]
@@ -23,6 +24,13 @@ def evaluate(expected, deliveries, safety_failures, elapsed_ms, physics_calibrat
             "reason": "Entregas requeridas incompletas: {}".format(", ".join(missing)),
             "completion_ms": None,
             "missing_deliveries": missing,
+        }
+    if not official_completion:
+        return {
+            "status": "FAIL",
+            "reason": "El árbitro no confirmó el reto cumplido durante la ronda.",
+            "completion_ms": None,
+            "missing_deliveries": [],
         }
     if not physics_calibrated:
         return {

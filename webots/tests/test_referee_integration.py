@@ -24,6 +24,21 @@ class RefereeIntegrationTest(unittest.TestCase):
         self.assertIn("READY -> RUNNING", referee.tictac(True))
         self.assertEqual(referee.fase, "RUNNING")
 
+    def test_completion_closes_round_and_requires_a_new_ready(self):
+        now = [0.0]
+        cfg = cargar_config(str(ROOT / "vision-system" / "vision" / "config_vision.json"))
+        referee = Arbitro(cfg, reloj=lambda: now[0])
+        referee.tictac(True)
+        referee.intentar("ready")
+        now[0] += cfg.ronda.preparacion_ms / 1000.0
+        referee.tictac(True)
+        referee.observar_reto(False, None)
+        now[0] += 2
+        self.assertIn("reto cumplido", referee.observar_reto(True, now[0] - 1))
+        self.assertEqual(referee.fase, "FINISHED")
+        self.assertIsNone(referee.observar_reto(True, now[0]))
+        self.assertIn("FINISHED -> READY", referee.intentar("ready"))
+
 
 if __name__ == "__main__":
     unittest.main()
