@@ -105,10 +105,13 @@ void Sensors::poll() {
   if (VRC_ENABLE_COLOR) pollColor();
 }
 
-bool Sensors::boundaryDetected() const {
-  if (!LINE_STOP_ON_DETECTION) return false;
-  return snapshot_.line_active[0] || snapshot_.line_active[1] ||
-         snapshot_.line_active[2] || snapshot_.line_active[3];
+// Sobre el tablero de ajedrez negro no significa borde: el borde lo decide
+// LineGuard según cuánto recorre cada sensor sin cambiar de color.
+uint8_t Sensors::lineMask() const {
+  uint8_t mask = 0;
+  for (uint8_t i = 0; i < 4; ++i)
+    if (snapshot_.line[i] == HIGH) mask |= static_cast<uint8_t>(1U << i);
+  return mask;
 }
 
 bool Sensors::obstacleNear(float cm) const {

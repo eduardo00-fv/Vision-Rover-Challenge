@@ -10,8 +10,9 @@ rover 1 por USB:
     python3 rover_control/diagnostico/sesion_viernes.py
 
 Detecta IP, puerto y marcador; carga el firmware de banco, prueba `!`, corre
-1→4 y 6 (y calcula 5), carga el autónomo y corre la 7 con los dos ritmos (3
-rondas cada uno). Solo pide lo físico (cubo en las paletas, reubicar, `r` en
+1→4 y 6 (y calcula 5), la prueba IR (sección 11), carga el autónomo y corre la
+7 con los dos ritmos (3 rondas cada uno). El USB solo se usa para cargar; las
+pruebas van por Wi-Fi. Solo IR: `sesion_viernes.py ir`. Solo pide lo físico (cubo en las paletas, reubicar, `r` en
 la visión). Ctrl+C detiene el rover; al volver a correrlo sigue donde quedó.
 Todo queda en `diagnostico/sesiones/<fecha>/RESULTADOS.md` con las tablas de
 abajo llenas. 8, 9 y 10 siguen siendo manuales.
@@ -130,6 +131,29 @@ Ambos encendidos y conectados a la visión.
 - [ ] Presionar BOOT: `[arranque] botón presionado: armado` y arranca.
 - [ ] Al terminar la ronda se desarma; la siguiente exige presionar otra vez.
 
+## 11. IR sobre el tablero de ajedrez  → `LINE_*` en `config.h`
+
+La cancha es un tablero de ajedrez: leer negro no es borde. `line_guard.h`
+declara un sensor fuera cuando se alejó más de `LINE_EDGE_MM` del lugar donde
+cambió de color por última vez (sobre la cancha cambia cada 20-28 mm). Cerca de
+las direcciones 45° y 26,6°/63,4° el umbral se duplica: ahí un sensor que roza
+esquinas ve rachas largas de un color. Es una red de seguridad que detecta
+tarde (el sensor ya pasó 40-85 mm el borde, según el ensayo), no una parada
+fina: la que evita salir es el margen de navegación con la cámara.
+
+El asistente lo hace en tres partes:
+
+1. **Quieto** (3 pedidos): sobre el tablero, sobre la lona y en el aire → polaridad.
+2. **Recorrido automático** (~40 s): rectas en 3 rumbos y giros. Con la pose
+   de la cámara ubica cada sensor en el chasis, detecta sensores trabados y
+   mide la racha más larga de un color → `LINE_EDGE_MM`.
+3. **Borde** (2 pedidos): rover a ~10 cm del borde mirando hacia afuera,
+   derecho y en diagonal; avanza de a 2-3 cm hasta que el guardia detecta y
+   vuelve solo. **Quedarse cerca para agarrarlo.**
+
+Deja en `RESULTADOS.md` el bloque de `config.h` listo para copiar. Solo
+sugiere `LINE_STOP_ON_DETECTION true` si detectó el borde en las dos pasadas.
+
 ## Después: cargar los números
 
 | Medición | Dónde se carga |
@@ -141,6 +165,7 @@ Ambos encendidos y conectados a la visión.
 | 5 | `Vision::proc_ms` y `net_*_ms`; `ARENA_SETTLE_MS` |
 | 6 | `NAV_PUSH_CONTACT_OFFSET_MM` en `hardware_config.h` |
 | 7 | `ARENA_SETTLE_MS` / `ARENA_MAX_DRIVE_MS` |
+| 11 | `LINE_STOP_ON_DETECTION`, `LINE_FRONT_MASK`, `LINE_REAR_MASK`, `LINE_EDGE_MM`, `LINE_SENSOR_RADIUS_MM` en `config.h` |
 
 Con los números cargados, volver a correr la campaña del simulador
 (`./vrc_sim --seeds 10`) antes de la siguiente sesión en la arena.

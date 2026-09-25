@@ -57,6 +57,24 @@ constexpr uint8_t COLOR_SENSOR_PIN = 32;
 #ifndef LINE_STOP_ON_DETECTION
 #define LINE_STOP_ON_DETECTION false
 #endif
+// Borde por IR sobre el tablero de ajedrez (line_guard.h): un sensor que
+// recorre LINE_EDGE_MM sin cambiar de color está fuera de la cancha. Las
+// máscaras dicen qué sensores van adelante y atrás (bit i = S(i+1)); salen de
+// la prueba `ir` de sesion_viernes.py. Un sensor trabado NO va en ninguna.
+#ifndef LINE_EDGE_MM
+#define LINE_EDGE_MM 60.0F
+#endif
+#ifndef LINE_SENSOR_RADIUS_MM
+#define LINE_SENSOR_RADIUS_MM 60.0F
+#endif
+#ifndef LINE_FRONT_MASK
+#define LINE_FRONT_MASK 0
+#endif
+#ifndef LINE_REAR_MASK
+#define LINE_REAR_MASK 0
+#endif
+static_assert(!LINE_STOP_ON_DETECTION || (LINE_FRONT_MASK | LINE_REAR_MASK) != 0,
+              "LINE_STOP_ON_DETECTION exige LINE_FRONT_MASK/LINE_REAR_MASK medidos en la arena");
 #ifndef COLOR_REFLECTION_IS_LOW
 #define COLOR_REFLECTION_IS_LOW true
 #endif

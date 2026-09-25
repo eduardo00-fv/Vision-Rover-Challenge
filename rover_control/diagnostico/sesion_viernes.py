@@ -9,6 +9,7 @@ visión). Ctrl+C manda `!` al rover antes de salir.
 
   python3 sesion_viernes.py                      # todo, en orden, reanudable
   python3 sesion_viernes.py banco                # solo pruebas 1-6
+  python3 sesion_viernes.py ir                   # solo IR: posición, polaridad y borde
   python3 sesion_viernes.py ritmo                # solo prueba 7
   python3 sesion_viernes.py preparar autonomo    # solo config + compilar + cargar
   python3 sesion_viernes.py informe              # rehace RESULTADOS.md
@@ -224,6 +225,7 @@ class Rover:
         self.puerto = puerto
         self.log = open(log, "a", buffering=1)
         self.lineas: list[str] = []
+        self.t_lineas: list[float] = []  # hora de llegada (ms época) de cada línea
         self.ser = None
         if puerto:
             import serial
@@ -243,6 +245,7 @@ class Rover:
             *lineas, pendiente_ = pendiente_.split(b"\n")
             for l in lineas:
                 texto = l.decode("utf-8", "replace").rstrip()
+                self.t_lineas.append(time.time() * 1000)
                 self.lineas.append(texto)
                 self.log.write(f"{time.time():.3f} < {texto}\n")
 
@@ -313,6 +316,7 @@ class RoverWifi(Rover):
                 *lineas, pendiente_ = pendiente_.split(b"\n")
                 for l in lineas:
                     texto = l.decode("utf-8", "replace").rstrip()
+                    self.t_lineas.append(time.time() * 1000)
                     self.lineas.append(texto)
                     self.log.write(f"{time.time():.3f} < {texto}\n")
             self.sock = None
@@ -653,6 +657,157 @@ class Sesion:
                                "p95": lat[int(0.95 * (len(lat) - 1))]})
             print(f"    5) latencia mediana {self.estado['5']['mediana']:.0f} ms, p95 {self.estado['5']['p95']:.0f} ms")
 
+    # -- prueba IR: tablero de ajedrez (ver analisis_ir.py y line_guard.h)
+
+    def ir_eventos(self, desde: float, hasta: float = math.inf) -> list[tuple[float, int]]:
+        eventos = []
+        for t, l in zip(list(self.rover.t_lineas), list(self.rover.lineas)):
+            m = re.match(r"\[ir\] t=\d+ m=(\d+)", l)
+            if m and desde <= t <= hasta:
+                eventos.append((t, int(m.group(1))))
+        return eventos
+
+    def ir_moda(self, segundos: float) -> int | None:
+        t0 = time.time() * 1000
+        time.sleep(segundos)
+        masks = [m for _, m in self.ir_eventos(t0)]
+        return max(set(masks), key=masks.count) if masks else None
+
+    def p_ir(self) -> None:
+        import numpy as np
+        import analisis_ir as A
+        self.firmware("banco")
+        desde = len(self.rover.lineas)
+        self.rover.enviar("IR ON")
+        if not self.rover.esperar(r"\[banco\] IR transmitiendo", 3, desde):
+            raise Abortar("el firmware de banco no conoce `IR ON`: cargá la versión nueva")
+
+        if not self.hecho("ir:estatico"):
+            lect = {}
+            for clave, texto in (("tablero", "IR 1/3: rover quieto sobre el tablero"),
+                                 ("lona", "IR 2/3: poné el rover con los 4 sensores sobre la lona, FUERA del tablero"),
+                                 ("aire", "IR 3/3: levantá el rover unos 3 cm y sostenelo quieto")):
+                pedir(texto + " (se mide 2 s después del Enter)")
+                lect[clave] = self.ir_moda(2)
+            self.guardar("ir:estatico", lect)
+            print(f"    IR quieto: tablero={lect['tablero']} lona={lect['lona']} aire={lect['aire']} "
+                  "(bit i = S(i+1) en HIGH)")
+            pedir("Volvé a poner el rover en el centro del tablero, sin cubos cerca")
+
+        if not self.hecho("ir:ajuste"):
+            print("[ir] recorrido automático: rectas en 3 rumbos y giros en sitio (~40 s)")
+            t0 = time.time() * 1000
+            for _ in range(3):
+                self.asegurar_espacio((1, -1), "prueba IR")
+                self.orden(18, 20, DUR_MS)
+                self.orden(-18, -20, DUR_MS)
+                self.orden(-25, 25, 400)
+            self.orden(-25, 25, GIRO_MS)
+            self.orden(25, -25, GIRO_MS)
+            poses = self.tel.serie(self.marcador, t0)
+            eventos = self.ir_eventos(t0 - 500)
+
+            def muestras(desfase_ms: float):
+                """Lectura IR vigente en el instante de cada captura, corrida `desfase_ms`."""
+                filas, bits, k = [], [], 0
+                for s_ in poses:
+                    t = s_["t"] + desfase_ms
+                    while k + 1 < len(eventos) and eventos[k + 1][0] <= t:
+                        k += 1
+                    if eventos and eventos[k][0] <= t:
+                        filas.append((s_["x"], s_["y"], s_["th"]))
+                        bits.append([(eventos[k][1] >> i) & 1 for i in range(4)])
+                return np.array(filas), np.array(bits)
+
+            P, B = muestras(15)
+            if len(P) < 100:
+                raise Abortar(f"muy pocas muestras IR+pose ({len(P)}): ¿se ve el marcador? ¿llega el IR?")
+            # El reloj de captura de la cámara y la llegada del IR por Wi-Fi no están
+            # alineados exactos; un desfase de 50 ms en un giro rápido ya es una
+            # casilla. Se prueba cuál explica mejor las lecturas.
+            print(f"[ir] ajustando posiciones con {len(P)} muestras (1-2 min)…")
+            mejor = None
+            for desfase in (-40, 0, 15, 40, 80, 120):
+                Pd, Bd = muestras(desfase)
+                ajustes_d, fase_d = A.ajustar(Pd, Bd)
+                total = sum(a.acierto for a in ajustes_d)
+                if mejor is None or total > mejor[0]:
+                    mejor = (total, desfase, ajustes_d, fase_d, Pd, Bd)
+            _, desfase, ajustes, fase, P, B = mejor
+            print(f"    desfase IR-cámara que mejor explica los datos: {desfase} ms")
+            np.savez(self.dir / "ir_recorrido.npz", poses=P, bits=B)
+            datos = []
+            for i, a in enumerate(ajustes):
+                racha = None if a.trabado else A.racha_maxima(P, B, i, a)
+                datos.append({"f": a.f, "l": a.l, "acierto": float(a.acierto), "cambios": a.cambios,
+                              "trabado": a.trabado, "racha_mm": racha})
+                print(f"    S{i + 1}: " + ("TRABADO (no cambió)" if a.trabado else
+                      f"{a.f:+.0f} mm adelante, {a.l:+.0f} mm a la derecha, acierto {a.acierto:.0%}, "
+                      f"racha máx. {racha:.0f} mm"))
+            self.guardar("ir:ajuste", {"sensores": datos, "fase": fase, "desfase_ms": desfase})
+
+        sensores = self.estado["ir:ajuste"]["sensores"]
+        buenos = [i for i, d in enumerate(sensores) if not d["trabado"] and d["acierto"] >= 0.75]
+        front = sum(1 << i for i in buenos if sensores[i]["f"] > 20)
+        rear = sum(1 << i for i in buenos if sensores[i]["f"] < -20)
+        rachas = [sensores[i]["racha_mm"] for i in buenos]
+        edge = max(60.0, math.ceil(max(rachas, default=50) * 1.2 / 5) * 5)
+        radio = statistics.fmean([math.hypot(sensores[i]["f"], sensores[i]["l"]) for i in buenos]) if buenos else 60
+        self.guardar("ir:parametros", {"front": front, "rear": rear, "edge_mm": edge, "radio_mm": radio})
+        if not front:
+            print("    Sin sensores delanteros confiables: se salta la prueba de borde")
+            return
+
+        for n, texto in ((1, "mirando DERECHO hacia afuera (perpendicular al borde)"),
+                         (2, "mirando hacia afuera en DIAGONAL (unos 45° respecto del borde)")):
+            clave = f"ir:borde:{n}"
+            if self.hecho(clave):
+                continue
+            pedir(f"Borde {n}/2: poné el rover a unos 10 cm del borde del tablero, {texto}. "
+                  "Quedate cerca: avanza de a 2-3 cm hasta que el guardia detecte el borde")
+            self.guardar(clave, self.ir_borde(A, front, rear, edge, radio, sensores))
+            r = self.estado[clave]
+            if r["detectado"]:
+                print(f"    borde {n}: detectado tras {r['pulsos']} pasos; sensor {r['fuera_mm']:+.0f} mm "
+                      "más allá del borde del tablero")
+            else:
+                print(f"    borde {n}: NO detectado en {r['pulsos']} pasos")
+        self.rover.enviar("IR OFF")
+
+    def ir_borde(self, A, front, rear, edge, radio, sensores) -> dict:
+        """Avanza de a pasos cortos reproduciendo LineGuard con lo grabado hasta que detecta."""
+        guard = A.LineGuard(edge, radio, front, rear)
+        ancho, alto = self.tel.arena_mm()
+        margen = 70.0  # el tablero físico se extiende 3,5 celdas más allá de la cancha lógica (MONTAJE.md)
+        t0 = time.time() * 1000 - 300
+        pulsos, detectado, fuera_mm, procesados = 0, None, None, 0
+        while pulsos < 12 and detectado is None:
+            self.orden(18, 20, 400)
+            pulsos += 1
+            eventos = sorted([(t, 0, m) for t, m in self.ir_eventos(t0)] +
+                             [(s_["t"], 1, (s_["x"], s_["y"], s_["th"])) for s_ in self.tel.serie(self.marcador, t0)],
+                             key=lambda e: (e[0], e[1]))
+            guard = A.LineGuard(edge, radio, front, rear)  # se reproduce todo en orden cada vez
+            for t, tipo, v in eventos:
+                if tipo == 0:
+                    guard.sample(v)
+                else:
+                    guard.pose(*v)
+                    if guard.fuera() & front:
+                        detectado = v
+                        break
+        if detectado:
+            x, y, th = detectado
+            peores = []
+            for i in range(4):
+                if front & (1 << i):
+                    wx, wy = A.mundo(x, y, th, sensores[i]["f"], sensores[i]["l"])
+                    peores.append(max(-margen - wx, -margen - wy, wx - ancho - margen, wy - alto - margen))
+            fuera_mm = float(max(peores))
+        for _ in range(pulsos):
+            self.orden(-18, -20, 400)
+        return {"detectado": detectado is not None, "pulsos": pulsos, "fuera_mm": fuera_mm}
+
     def banco(self) -> None:
         self.conectar_vision()
         pendientes = [c for c in ("1", "2", "3", "4", "6") if not any(k.startswith(c + ":") for k in self.estado)]
@@ -784,6 +939,7 @@ class Sesion:
             L.append(f"| {nombre} | {', '.join(f(r['tiempo_s'], 1) for r in rs) or '—'} | "
                      f"{sum(r['entregado'] for r in rs)}/{len(rs)} | {f(max((r['falta_mm'] for r in rs), default=None))} | "
                      f"{'; '.join(f'{k}×{v}' for r in rs for k, v in r['motivos'].items()) or '—'} |")
+        L += self.informe_ir()
         v1820 = e.get("1:18/20", {}).get("ida", {}).get("v_media_mm_s")
         L += ["", "## Valores sugeridos (no se aplican solos)", "",
               f"- `kNominalMmPerS` / `Physics::k_mm_s`: v a 18/20 = {f(v1820)} mm/s (referencia 19/09: ~64).",
@@ -794,6 +950,41 @@ class Sesion:
         (self.dir / "RESULTADOS.md").write_text("\n".join(L))
         print(f"[informe] {self.dir / 'RESULTADOS.md'}")
 
+    def informe_ir(self) -> list[str]:
+        e = self.estado
+        if "ir:ajuste" not in e:
+            return []
+        L = ["", "## IR sobre el tablero de ajedrez", ""]
+        q = e.get("ir:estatico", {})
+        if q:
+            L += [f"Quieto (bit i = S(i+1) en HIGH): tablero {q.get('tablero')}, lona {q.get('lona')}, "
+                  f"en el aire {q.get('aire')}.", ""]
+        L += ["| Sensor | Adelante (mm) | Derecha (mm) | Acierto | Cambios | Racha máx. sobre la cancha (mm) |",
+              "| --- | --- | --- | --- | --- | --- |"]
+        for i, d in enumerate(e["ir:ajuste"]["sensores"]):
+            if d["trabado"]:
+                L.append(f"| S{i + 1} | — | — | — | {d['cambios']} | TRABADO |")
+            else:
+                L.append(f"| S{i + 1} | {d['f']:+.0f} | {d['l']:+.0f} | {d['acierto']:.0%} | {d['cambios']} | "
+                         f"{d['racha_mm']:.0f} |")
+        par = e.get("ir:parametros", {})
+        bordes = [e[k] for k in ("ir:borde:1", "ir:borde:2") if k in e]
+        for n, b in enumerate(bordes, 1):
+            L += ["", f"Borde {n}: " + (f"detectado con el sensor {b['fuera_mm']:+.0f} mm más allá del tablero"
+                                        if b["detectado"] else f"NO detectado en {b['pulsos']} pasos")]
+        lona = q.get("lona")
+        habilitar = bool(par.get("front")) and len(bordes) == 2 and all(b["detectado"] for b in bordes)
+        L += ["", "Configuración sugerida para `config.h`" + ("" if habilitar else
+              " (NO habilitar todavía: falta detectar el borde en las dos pruebas)") + ":", "", "```",
+              f"#define LINE_STOP_ON_DETECTION {'true' if habilitar else 'false'}"]
+        if lona is not None:
+            L.append(f"#define LINE_BLACK_IS_LOW {'true' if lona == 15 else 'false'}  // la lona (blanca) leyó {lona}")
+        L += [f"#define LINE_FRONT_MASK 0b{par.get('front', 0):04b}",
+              f"#define LINE_REAR_MASK 0b{par.get('rear', 0):04b}",
+              f"#define LINE_EDGE_MM {par.get('edge_mm', 60):.0f}.0F",
+              f"#define LINE_SENSOR_RADIUS_MM {par.get('radio_mm', 60):.0f}.0F", "```"]
+        return L
+
     def cerrar(self) -> None:
         if self.rover:
             self.rover.cerrar()
@@ -803,7 +994,7 @@ class Sesion:
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("orden", nargs="?", default="todo", choices=("todo", "banco", "ritmo", "preparar", "informe"))
+    p.add_argument("orden", nargs="?", default="todo", choices=("todo", "banco", "ir", "ritmo", "preparar", "informe"))
     p.add_argument("modo", nargs="?", choices=("banco", "autonomo", "red"), help="solo con `preparar`")
     p.add_argument("--host", default="127.0.0.1", help="visión, para leer la telemetría")
     p.add_argument("--ip", help="IP que se graba en el rover (por defecto: se detecta)")
@@ -834,6 +1025,10 @@ def main() -> int:
             s.informe()
         if args.orden in ("todo", "banco"):
             s.banco()
+        if args.orden in ("todo", "ir"):
+            s.conectar_vision()
+            s.p_ir()
+            s.informe()
         if args.orden in ("todo", "ritmo"):
             s.ritmo()
     except KeyboardInterrupt:

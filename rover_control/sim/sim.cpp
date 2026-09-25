@@ -89,6 +89,7 @@ struct Firmware {
   FwTcpPush espnow_deliver = nullptr;
   FwSerialInput serial_input = nullptr;
   FwSetFlag button = nullptr;
+  FwSetFlag line = nullptr;
 
   template<class T> bool bind(T& target, const char* name) {
     target = reinterpret_cast<T>(dlsym(handle, name));
@@ -106,7 +107,8 @@ struct Firmware {
            bind(motors, "fw_motors") && bind(status, "fw_status") &&
            bind(serial_capture, "fw_serial_capture") && bind(serial_take, "fw_serial_take") &&
            bind(espnow_take, "fw_espnow_take") && bind(espnow_deliver, "fw_espnow_deliver") &&
-           bind(serial_input, "fw_serial_input") && bind(button, "fw_button");
+           bind(serial_input, "fw_serial_input") && bind(button, "fw_button") &&
+           bind(line, "fw_line");
   }
   std::string path;
   void unload() {
@@ -125,13 +127,15 @@ struct RoverSpec { int id; double col, row, theta_deg; };
 struct CubeSpec { std::string color; double col, row; };
 struct DepotSpec { std::string color; double col, row; };
 
-enum class EventType { CUBE_HIDE, ROVER_HIDE, TCP_DOWN, IMU_FAIL, CUBE_HIDE_NEAR, MOTOR_FAIL, ESPNOW_DOWN, ESTOP, BUTTON };
+enum class EventType { CUBE_HIDE, ROVER_HIDE, TCP_DOWN, IMU_FAIL, CUBE_HIDE_NEAR, MOTOR_FAIL, ESPNOW_DOWN, ESTOP, BUTTON,
+                       VISION_BIAS };
 struct Event {
   EventType type;
   std::string target;   // color o id de rover
   double t0_ms = 0, t1_ms = 0;  // relativos al inicio de RUNNING
   double radius_mm = 0;         // CUBE_HIDE_NEAR: se oculta al acercarse un rover
   double duration_ms = 0;
+  double bias_x_mm = 0;         // VISION_BIAS: la cámara informa al rover corrido en x
 };
 
 struct Scenario {
@@ -236,6 +240,12 @@ std::vector<Scenario> catalog() {
   s.rovers = officialStart(false); s.cubes = {{"red", 22, 21.5}};
   s.time_offset_us = 4294967296ULL - 12000000ULL; add(s);
 
+  // La cámara informa al rover 10 corrido 200 mm (error de calibración). Con
+  // guardia IR o sin él, entrega sin salirse: el empuje se corrige contra el cubo.
+  s = {}; s.name = "calibracion_corrida"; s.purpose = "Visión informa al rover 200 mm corrido en x: ¿entrega sin salirse?";
+  s.rovers = officialStart(false); s.cubes = {{"red", 30, 21.5}};
+  { Event e{EventType::VISION_BIAS, "10", 4000, 1e12}; e.bias_x_mm = -200; s.events = {e}; } add(s);
+
   s = {}; s.name = "aleatorio"; s.purpose = "Tres cubos en posiciones aleatorias según la semilla";
   s.rovers = officialStart(); s.random_cubes = true; add(s);
 
@@ -281,6 +291,7 @@ struct Rover {
   double travelled_mm = 0, moving_ms = 0, still_run_ms = 0, longest_still_ms = 0;
   std::string first_fault;
   FILE* serial_log = nullptr;
+  bool edge_backoff = false;
 };
 
 struct Cube {
@@ -306,6 +317,8 @@ struct Result {
   bool pass = false; std::vector<std::string> reasons;
   int delivered = 0, required = 0; double completion_ms = -1;
   int collisions = 0, off_surface = 0; double min_center_gap_mm = 1e9;
+  int edge_backoffs = 0;  // órdenes cambiadas por el guardia de borde IR
+  double max_out_mm = 0;  // cuánto llegó a salir una esquina más allá de la superficie física
   std::map<int, std::string> rover_notes;
 };
 
@@ -517,7 +530,10 @@ class Simulation {
       Frame f; f.capture_ms = t;
       for (auto& r : rovers_) {
         const bool seen = !eventActive(EventType::ROVER_HIDE, std::to_string(r.id)) && !rng_.chance(vis_.rover_drop_p);
-        f.rovers.push_back({r.id, seen, r.body.x + rng_.normal(vis_.pos_noise_mm),
+        double bias = 0;
+      for (const auto& e : s_.events)
+        if (e.type == EventType::VISION_BIAS && eventActive(e.type, std::to_string(r.id))) bias = e.bias_x_mm;
+      f.rovers.push_back({r.id, seen, r.body.x + bias + rng_.normal(vis_.pos_noise_mm),
                             r.body.y + rng_.normal(vis_.pos_noise_mm),
                             r.body.th + rng_.normal(vis_.theta_noise_deg * kDeg)});
       }
@@ -604,6 +620,26 @@ class Simulation {
     }
   }
 
+  // IR del borde sobre el tablero de ajedrez físico (celdas de 20 mm, que se
+  // extiende kSurfaceMargin más allá de la cancha lógica); afuera, lona blanca.
+  // Posiciones SUPUESTAS hasta medirlas: S1/S2 adelante izq/der, S3/S4 atrás.
+  int lineMask(const Body& b) {
+    static const double kSensors[4][2] = {{55, -30}, {55, 30}, {-55, -30}, {-55, 30}};  // adelante, derecha
+    const double w = s_.cols * s_.cell_mm, h = s_.rows * s_.cell_mm;
+    int mask = 0;
+    for (int i = 0; i < 4; ++i) {
+      const double f = kSensors[i][0], l = kSensors[i][1];
+      const double x = b.x + f * std::cos(b.th) + l * std::sin(b.th) + rng_.normal(1.0);
+      const double y = b.y - f * std::sin(b.th) + l * std::cos(b.th) + rng_.normal(1.0);
+      bool black = false;
+      if (x > -kSurfaceMargin && y > -kSurfaceMargin && x < w + kSurfaceMargin && y < h + kSurfaceMargin)
+        black = (static_cast<long>(std::floor((x + kSurfaceMargin) / 20)) +
+                 static_cast<long>(std::floor((y + kSurfaceMargin) / 20))) & 1;
+      if (!black) mask |= 1 << i;  // LINE_BLACK_IS_LOW: blanco = HIGH
+    }
+    return mask;
+  }
+
   void firmwareStep(Rover& r, double t) {
     while (!r.queue.empty() && r.queue.front().deliver_ms <= t) {
       const Msg& m = r.queue.front();
@@ -623,10 +659,14 @@ class Simulation {
       r.fw.serial_input("!"); r.estop_sent = true;
     }
     r.fw.button(eventActive(EventType::BUTTON, std::to_string(r.id)));
+    r.fw.line(lineMask(r.body));
     r.fw.loop();
     routeEspNow(r, t);
     r.fw.motors(&r.cmd_l, &r.cmd_r);
     r.fw.status(&r.status);
+    const bool backoff = r.status.mode && std::string(r.status.mode) == "EDGE_BACK_OFF";
+    if (backoff && !r.edge_backoff) ++result_.edge_backoffs;
+    r.edge_backoff = backoff;
     if (r.serial_log) {
       char chunk[4096];
       for (size_t k; (k = r.fw.serial_take(chunk, sizeof(chunk))) > 0;) {
@@ -763,6 +803,9 @@ class Simulation {
       const double self_age = r.known_self_age_ms + (t - r.known_at_ms);
       if (moving_cmd && self_age > 300 + 50) fault(r, "movimiento con pose propia vencida");
       for (auto p : corners(r.body))
+        result_.max_out_mm = std::max({result_.max_out_mm, -kSurfaceMargin - p.x, -kSurfaceMargin - p.y,
+                                       p.x - w - kSurfaceMargin, p.y - h - kSurfaceMargin});
+      for (auto p : corners(r.body))
         if (p.x < -kSurfaceMargin || p.y < -kSurfaceMargin || p.x > w + kSurfaceMargin || p.y > h + kSurfaceMargin) {
           if (r.first_fault.find("superficie") == std::string::npos) { ++result_.off_surface; fault(r, "salida de la superficie"); }
           break;
@@ -835,9 +878,9 @@ class Simulation {
 void printResult(const Result& r, bool json) {
   if (json) {
     std::printf("{\"scenario\":\"%s\",\"seed\":%llu,\"pass\":%s,\"delivered\":%d,\"required\":%d,\"completion_ms\":%.0f,"
-                "\"collisions\":%d,\"off_surface\":%d,\"min_center_gap_mm\":%.0f,\"reasons\":[",
+                "\"collisions\":%d,\"off_surface\":%d,\"min_center_gap_mm\":%.0f,\"edge_backoffs\":%d,\"max_out_mm\":%.0f,\"reasons\":[",
                 r.scenario.c_str(), static_cast<unsigned long long>(r.seed), r.pass ? "true" : "false", r.delivered,
-                r.required, r.completion_ms, r.collisions, r.off_surface, r.min_center_gap_mm);
+                r.required, r.completion_ms, r.collisions, r.off_surface, r.min_center_gap_mm, r.edge_backoffs, r.max_out_mm);
     for (size_t i = 0; i < r.reasons.size(); ++i) std::printf("%s\"%s\"", i ? "," : "", r.reasons[i].c_str());
     std::printf("]}\n");
     return;

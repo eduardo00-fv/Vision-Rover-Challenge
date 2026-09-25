@@ -44,3 +44,42 @@ def test_cubo_en_su_zona_como_el_contrato():
     depot = {"color": "green", "col": 21.5, "row": 3.75}
     assert sv.cubo_en_su_zona({"col": 21.48, "row": 3.762}, depot, size, grid, 3.0)[0]
     assert not sv.cubo_en_su_zona({"col": 21.5, "row": 5.5}, depot, size, grid, 3.0)[0]
+
+
+def test_ajuste_ir_ubica_sensores_y_detecta_trabado():
+    import numpy as np
+    sys_path = str(SCRIPT.parent)
+    import sys
+    if sys_path not in sys.path:
+        sys.path.insert(0, sys_path)
+    import analisis_ir as A
+    rng = np.random.default_rng(3)
+    reales = [(55, -30), (55, 30), (-55, -30)]
+    poses, x, y, th = [], 430.0, 430.0, 20.0
+    for n, dv, dth in [(30, 3, 0), (30, -3, 0), (8, 0, 5)] * 3 + [(40, 0, 4), (40, 0, -4)]:
+        for _ in range(n):
+            x += dv * np.cos(np.radians(th)); y -= dv * np.sin(np.radians(th)); th += dth
+            poses.append((x, y, th))
+    P = np.array(poses)
+    B = np.ones((len(P), 4), int)  # S4 trabado
+    for i, (f, l) in enumerate(reales):
+        B[:, i] = A.color(*A.mundo(P[:, 0], P[:, 1], P[:, 2], f, l), 10, 10)
+    ruido = P + np.c_[rng.normal(0, 2, len(P)), rng.normal(0, 2, len(P)), rng.normal(0, 1, len(P))]
+    ajustes, _ = A.ajustar(ruido, B, rango=80)
+    for a, (f, l) in zip(ajustes, reales):
+        assert abs(a.f - f) <= 3 and abs(a.l - l) <= 3 and a.acierto > 0.8
+    assert ajustes[3].trabado
+
+
+def test_line_guard_python_detecta_borde_y_no_el_ruido():
+    import sys
+    sys.path.insert(0, str(SCRIPT.parent))
+    import analisis_ir as A
+    g = A.LineGuard(60, 60, 0b0001, 0b0010)
+    g.sample(0)
+    for k in range(200):
+        g.pose(300 + (k % 3) - 1, 300, 90 + (k % 2))
+    assert g.fuera() == 0
+    for k in range(1, 40):
+        g.pose(300 + 3 * k, 300, 0)
+    assert g.fuera() & 0b0001

@@ -1,5 +1,6 @@
 #include "config.h"
 #include "hardware_config.h"
+#include "line_guard.h"
 #include "mission_controller.h"
 #include "motor_controller.h"
 #include "peer_link.h"
@@ -22,6 +23,8 @@ Sensors sensors;
 VisionNavigator navigator;
 PeerLink peers;  // ESP-NOW con el compañero: solo informativo
 StartButton start_button;
+LineGuard line_guard;
+uint64_t line_guard_capture = 0;
 ArenaMotion<decltype(Wire)> motion(Wire, VRC_PHYSICAL_ROVER == 1
     ? rover_motion::rover1 : rover_motion::rover2);
 bool emergency_stop = false;
@@ -37,6 +40,9 @@ uint32_t motor_bench_stop_at_ms = 0;
 WiFiClient bench_client;
 bool bench_was_connected = false;
 uint32_t bench_retry_ms = 0;
+bool bench_ir_stream = false;  // IR ON: cada cambio de los IR (y un latido) por la consola
+uint8_t bench_ir_last = 0xFF;
+uint32_t bench_ir_sent_ms = 0;
 
 void benchLine(const char* text) {
   Serial.println(text);
@@ -69,10 +75,14 @@ void benchCommand(String line) {
   line.trim();
   line.toUpperCase();
   if (line == "HELP") {
-    benchLine("[banco] ARM | DISARM | STOP | MOTOR <izq -35..35> <der -35..35> <ms 1..1500>");
+    benchLine("[banco] ARM | DISARM | STOP | IR ON | IR OFF | MOTOR <izq -35..35> <der -35..35> <ms 1..1500>");
   } else if (line == "ARM") {
     motor_bench_armed = true;
     benchLine("[banco] armado; use PWM bajo y mantenga distancia de seguridad");
+  } else if (line == "IR ON" || line == "IR OFF") {
+    bench_ir_stream = line == "IR ON";
+    bench_ir_last = 0xFF;
+    benchLine(bench_ir_stream ? "[banco] IR transmitiendo" : "[banco] IR detenido");
   } else if (line == "DISARM" || line == "STOP") {
     benchStop();
     benchLine("[banco] detenido y desarmado");
@@ -127,6 +137,17 @@ void motorBench() {
     benchLine("[banco] fin de orden; motores detenidos");
   }
   benchLink();
+  if (bench_ir_stream) {
+    sensors.poll();
+    const uint8_t mask = sensors.lineMask();
+    if (mask != bench_ir_last || millis() - bench_ir_sent_ms >= 100) {
+      char text[40];
+      snprintf(text, sizeof(text), "[ir] t=%lu m=%u", static_cast<unsigned long>(millis()), mask);
+      benchLine(text);
+      bench_ir_last = mask;
+      bench_ir_sent_ms = millis();
+    }
+  }
   for (unsigned i = 0; i < 32 && Serial.available(); ++i) bench_serial.feed(Serial.read());
   for (unsigned i = 0; i < 32 && bench_client.available(); ++i) bench_wifi.feed(bench_client.read());
 }
@@ -162,6 +183,7 @@ void printStatus(const WorldState& world) {
       Serial.printf("[espnow] compañero=%u sin datos (enlace=%d)\n", world.rovers[i].id, peers.active());
   }
   if (VRC_REQUIRE_START_BUTTON) Serial.printf("[arranque] armado=%d\n", start_button.armed());
+  Serial.printf("[ir] m=%u fuera=%u borde=%d\n", sensors.lineMask(), line_guard.offMask(), LINE_STOP_ON_DETECTION);
   const RoverObservation* self = findRover(world, ROVER_ID);
   const SensorSnapshot& sensor = sensors.snapshot();
   Serial.printf("[estado] wifi=%s tcp=%s fsm=%s validos=%lu invalidos=%lu saltos=%lu "
@@ -192,6 +214,28 @@ void exchangePeers(const WorldState& world) {
   peers.publish(navigator.claimedTarget(), navigator.stage(), can_move, now);
 }
 
+// IR del borde: alimenta LineGuard con la lectura y la pose propia, y si un
+// sensor delantero salió de la cancha cambia la orden por un retroceso corto.
+LineGuard::Action updateLineGuard(const WorldState& world, bool pose_ok, DriveCommand& command) {
+  if (!LINE_STOP_ON_DETECTION) return LineGuard::Action::NONE;
+  line_guard.sample(sensors.lineMask());
+  const RoverObservation* self = findRover(world, ROVER_ID);
+  // Misma vara que el supervisor: una pose que no sirve para moverse tampoco
+  // sirve para medir recorrido (el mensaje puede decir age 0 y tener segundos).
+  if (!pose_ok || self == nullptr || self->age_ms > MAX_SELF_POSE_AGE_MS) {
+    line_guard.losePose();
+  } else if (world.captured_at_ms != line_guard_capture) {
+    line_guard_capture = world.captured_at_ms;
+    line_guard.pose(self->col * world.grid.cell_mm, self->row * world.grid.cell_mm, self->theta_deg);
+  }
+  const LineGuard::Action edge = line_guard.action(command.active, command.reverse);
+  if (edge == LineGuard::Action::BACK_OFF) {
+    command.active = true; command.reverse = true; command.pushing = false;
+    command.heading_error_deg = 0; command.distance_mm = 80; command.mode = "EDGE_BACK_OFF";
+  }
+  return edge;
+}
+
 void setup() {
   Serial.begin(115200);
   delay(200);
@@ -200,11 +244,13 @@ void setup() {
 #if VRC_ENABLE_MOTOR_BENCH
   Serial.println("[banco] MODO BANCO ACTIVO: no ejecuta misión");
   Serial.println("[banco] escriba HELP");
+  sensors.begin();
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);  // consola del banco por Wi-Fi
   return;
 #endif
   sensors.begin();
+  line_guard.configure(LINE_EDGE_MM, LINE_SENSOR_RADIUS_MM, LINE_FRONT_MASK, LINE_REAR_MASK);
   if (VRC_REQUIRE_START_BUTTON) pinMode(START_BUTTON_PIN, INPUT_PULLUP);
   telemetry.begin();
 #if VRC_ENABLE_ESPNOW
@@ -253,11 +299,12 @@ void loop() {
   const bool armed = !VRC_REQUIRE_START_BUTTON ||
       start_button.update(digitalRead(START_BUTTON_PIN) == LOW, mission.state() == MissionState::FINISHED, millis());
   if (VRC_REQUIRE_START_BUTTON && armed && !was_armed) Serial.println("[arranque] botón presionado: armado");
-  const DriveCommand command = navigator.update(world, ROVER_ID);
+  DriveCommand command = navigator.update(world, ROVER_ID);
+  const LineGuard::Action edge = updateLineGuard(world, decision.motion_allowed, command);
   last_command = command;
   const bool allowed = !VRC_NETWORK_ONLY && !emergency_stop && armed && telemetry.connected() &&
       decision.motion_allowed && mission.state() == MissionState::RUNNING &&
-      !sensors.boundaryDetected() &&
+      edge != LineGuard::Action::STOP &&
       !(sensors.obstacleNear(ULTRASONIC_STOP_CM) && !command.pushing);
   motion.command(allowed, command.active, command.heading_error_deg, command.target,
                  command.pushing, world.captured_at_ms, micros(), command.reverse,

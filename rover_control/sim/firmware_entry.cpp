@@ -17,6 +17,9 @@ FW_API void fw_setup() {
   setup();
 }
 FW_API void fw_button(int pressed) { sim_digital[START_BUTTON_PIN] = pressed ? LOW : HIGH; }
+FW_API void fw_line(int mask) {  // IR S1..S4: bit i = HIGH
+  for (uint8_t i = 0; i < 4; ++i) sim_digital[LINE_PINS[i]] = (mask >> i) & 1 ? HIGH : LOW;
+}
 FW_API void fw_loop() { loop(); }
 FW_API void fw_set_time(uint64_t us) { sim_time_us = us; }
 FW_API uint64_t fw_get_time() { return sim_time_us; }  // setup() consume delay()

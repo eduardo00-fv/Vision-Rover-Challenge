@@ -18,7 +18,7 @@ class Sensors {
   void begin();
   void poll();
   const SensorSnapshot& snapshot() const { return snapshot_; }
-  bool boundaryDetected() const;
+  uint8_t lineMask() const;  // bit i = lectura HIGH de S(i+1)
   bool obstacleNear(float cm) const;
 
  private:

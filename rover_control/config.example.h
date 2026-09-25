@@ -27,11 +27,13 @@ constexpr uint8_t ROVER_ID = 10;
 #define VRC_ENABLE_MOTOR_BENCH 0
 
 // IR S1..S4: GPIO4/5/18/19. Lectura digital (GPIO19 no tiene ADC).
-// Confirmar polaridad sobre claro/oscuro antes de habilitar parada.
-#define LINE_BLACK_IS_LOW true
-// La cuadrícula de la competencia puede tener líneas bajo el rover. Déjelo en
-// false hasta comprobar que estas líneas son un borde de seguridad, no la grilla.
-#define LINE_STOP_ON_DETECTION false
+// La cancha es un tablero de ajedrez: negro NO es borde. El borde se detecta
+// por recorrido sin cambio de color (line_guard.h). Habilitar solo con las
+// máscaras que da la prueba `ir` de sesion_viernes.py, por ejemplo:
+// #define LINE_STOP_ON_DETECTION true
+// #define LINE_FRONT_MASK 0b0011
+// #define LINE_REAR_MASK 0b1100
+// #define LINE_EDGE_MM 60.0F
 
 // Sensor de color reflectivo: NeoPixel iluminador en IO23 y salida analógica en
 // IO32. Cambie a false si su fotodetector aumenta la lectura con más reflexión.
