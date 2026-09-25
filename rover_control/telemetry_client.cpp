@@ -1,15 +1,19 @@
 #include "telemetry_client.h"
 
 #include <ArduinoJson.h>
+#include <math.h>
 
 namespace {
 constexpr uint8_t PROTOCOL_VERSION = 2;
 constexpr size_t JSON_CAPACITY = 3072;
 
 bool required(JsonVariantConst value) { return !value.isNull(); }
+bool number(JsonVariantConst value) {
+  return value.is<double>() && isfinite(value.as<double>());
+}
 
 bool pointFrom(JsonObjectConst object, PointCells& point) {
-  if (!required(object["col"]) || !required(object["row"])) return false;
+  if (!number(object["col"]) || !number(object["row"])) return false;
   point.col = object["col"].as<float>();
   point.row = object["row"].as<float>();
   return true;
@@ -27,6 +31,7 @@ void TelemetryClient::begin() {
 }
 
 void TelemetryClient::poll() {
+  if (WiFi.status() != WL_CONNECTED || !socket_.connected()) latest_.valid = false;
   ensureWifi();
   ensureTcp();
   readSocket();
@@ -38,7 +43,7 @@ bool TelemetryClient::hasFreshWorld(uint32_t max_transport_age_ms) const {
   return latest_.valid && (millis() - latest_.received_at_ms) <= max_transport_age_ms;
 }
 
-bool TelemetryClient::connected() const {
+bool TelemetryClient::connected() {
   return WiFi.status() == WL_CONNECTED && socket_.connected();
 }
 
@@ -57,9 +62,11 @@ void TelemetryClient::ensureTcp() {
   if (now - last_tcp_attempt_ms_ < TCP_RETRY_MS) return;
   last_tcp_attempt_ms_ = now;
   Serial.printf("[tcp] conectando a %s:%u\n", host_, port_);
-  if (socket_.connect(host_, port_)) {
+  if (socket_.connect(host_, port_, 50)) {
     ++reconnects_;
     line_length_ = 0;
+    discard_line_ = false;
+    new_session_ = true;
     Serial.println("[tcp] telemetria conectada");
   } else {
     Serial.println("[tcp] conexion fallida");
@@ -68,18 +75,24 @@ void TelemetryClient::ensureTcp() {
 
 void TelemetryClient::readSocket() {
   if (!socket_.connected()) return;
-  while (socket_.available() > 0) {
+  // Limitar trabajo por vuelta: un emisor continuo no debe monopolizar el control.
+  size_t budget = LINE_BUFFER_SIZE * 2;
+  while (budget-- && socket_.available() > 0) {
     const char byte = static_cast<char>(socket_.read());
     if (byte == '\r') continue;
     if (byte == '\n') {
       line_buffer_[line_length_] = '\0';
-      processLine();
+      if (!discard_line_) processLine();
       line_length_ = 0;
+      discard_line_ = false;
       continue;
     }
+    if (discard_line_) continue;
     if (line_length_ >= LINE_BUFFER_SIZE - 1) {
       ++invalid_messages_;
       line_length_ = 0;
+      discard_line_ = true;
+      latest_.valid = false;
       Serial.println("[telemetria] linea demasiado larga; descartada");
       continue;
     }
@@ -92,11 +105,15 @@ void TelemetryClient::processLine() {
   WorldState parsed;
   if (!parseMessage(line_buffer_, parsed)) {
     ++invalid_messages_;
+    latest_.valid = false;
     return;
   }
-  if (latest_.valid && parsed.seq <= latest_.seq) return;
+  if (!new_session_ && parsed.seq <= latest_.seq) return;
+  // Una retransmisión de la misma captura no renueva su vida útil.
+  if (!new_session_ && parsed.captured_at_ms <= latest_.captured_at_ms) return;
   parsed.sequence_gap = latest_.valid ? parsed.seq - latest_.seq - 1 : 0;
   latest_ = parsed;
+  new_session_ = false;
   ++valid_messages_;
 }
 
@@ -108,7 +125,7 @@ bool TelemetryClient::parseMessage(const char* line, WorldState& parsed) {
     return false;
   }
   const JsonObjectConst root = document.as<JsonObjectConst>();
-  if (root.isNull() || root["v"].as<uint8_t>() != PROTOCOL_VERSION) return false;
+  if (root.isNull() || !root["v"].is<uint8_t>() || root["v"].as<uint8_t>() != PROTOCOL_VERSION) return false;
 
   const JsonObjectConst clock = root["clock"];
   const JsonObjectConst grid = root["grid"];
@@ -120,6 +137,16 @@ bool TelemetryClient::parseMessage(const char* line, WorldState& parsed) {
       !required(root["cubes"]) || !required(root["obstacles"]) || !required(root["depots"])) {
     return false;
   }
+
+  if (!root["seq"].is<uint32_t>() || !root["ts_ms"].is<uint64_t>() ||
+      !root["phase"].is<const char*>() || !root["rovers"].is<JsonArrayConst>() ||
+      !root["cubes"].is<JsonArrayConst>() || !root["depots"].is<JsonArrayConst>() ||
+      !root["obstacles"].is<JsonArrayConst>() ||
+      !clock["elapsed_ms"].is<uint32_t>() || !clock["remaining_ms"].is<uint32_t>() ||
+      !clock["total_ms"].is<uint32_t>() || !grid["cols"].is<uint16_t>() ||
+      !grid["rows"].is<uint16_t>() || !number(grid["cell_mm"]) ||
+      !number(depot_size["length"]) || !number(depot_size["depth"]) ||
+      !number(root["cube_side"])) return false;
 
   parsed.protocol_version = PROTOCOL_VERSION;
   parsed.seq = root["seq"].as<uint32_t>();
@@ -137,11 +164,13 @@ bool TelemetryClient::parseMessage(const char* line, WorldState& parsed) {
   parsed.depot_size.depth_cells = depot_size["depth"].as<float>();
   parsed.cube_side_cells = root["cube_side"].as<float>();
   if (!pointFrom(start, parsed.start) || parsed.grid.cols == 0 || parsed.grid.rows == 0 ||
-      parsed.grid.cell_mm <= 0.0F || parsed.cube_side_cells <= 0.0F) return false;
+      parsed.grid.cell_mm <= 0.0F || parsed.cube_side_cells <= 0.0F ||
+      parsed.depot_size.length_cells <= 0.0F || parsed.depot_size.depth_cells <= 0.0F) return false;
 
   for (JsonObjectConst item : root["rovers"].as<JsonArrayConst>()) {
-    if (parsed.rover_count >= MAX_ROVERS || !required(item["id"]) ||
-        !required(item["theta"]) || !required(item["age_ms"])) return false;
+    if (parsed.rover_count >= MAX_ROVERS || !item["id"].is<uint8_t>() ||
+        !number(item["theta"]) || !item["age_ms"].is<uint32_t>()) return false;
+    if (findRover(parsed, item["id"].as<uint8_t>()) != nullptr) return false;
     RoverObservation& rover = parsed.rovers[parsed.rover_count];
     if (!pointFrom(item, rover)) return false;
     rover.id = item["id"].as<uint8_t>();
@@ -150,7 +179,8 @@ bool TelemetryClient::parseMessage(const char* line, WorldState& parsed) {
     ++parsed.rover_count;
   }
   for (JsonObjectConst item : root["cubes"].as<JsonArrayConst>()) {
-    if (parsed.cube_count >= MAX_CUBES || !required(item["color"]) || !required(item["age_ms"])) return false;
+    if (parsed.cube_count >= MAX_CUBES || !item["color"].is<const char*>() || !item["age_ms"].is<uint32_t>()) return false;
+    if (findCube(parsed, item["color"].as<const char*>()) != nullptr) return false;
     CubeObservation& cube = parsed.cubes[parsed.cube_count];
     if (!pointFrom(item, cube)) return false;
     cube.color = item["color"].as<const char*>();
@@ -158,14 +188,15 @@ bool TelemetryClient::parseMessage(const char* line, WorldState& parsed) {
     ++parsed.cube_count;
   }
   for (JsonObjectConst item : root["obstacles"].as<JsonArrayConst>()) {
-    if (parsed.obstacle_count >= MAX_OBSTACLES || !required(item["age_ms"])) return false;
+    if (parsed.obstacle_count >= MAX_OBSTACLES || !item["age_ms"].is<uint32_t>()) return false;
     ObstacleObservation& obstacle = parsed.obstacles[parsed.obstacle_count];
     if (!pointFrom(item, obstacle)) return false;
     obstacle.age_ms = item["age_ms"].as<uint32_t>();
     ++parsed.obstacle_count;
   }
   for (JsonObjectConst item : root["depots"].as<JsonArrayConst>()) {
-    if (parsed.depot_count >= MAX_CUBES || !required(item["color"])) return false;
+    if (parsed.depot_count >= MAX_CUBES || !item["color"].is<const char*>()) return false;
+    if (findDepot(parsed, item["color"].as<const char*>()) != nullptr) return false;
     Depot& depot = parsed.depots[parsed.depot_count];
     if (!pointFrom(item, depot)) return false;
     depot.color = item["color"].as<const char*>();
@@ -174,4 +205,3 @@ bool TelemetryClient::parseMessage(const char* line, WorldState& parsed) {
   parsed.valid = true;
   return true;
 }
-

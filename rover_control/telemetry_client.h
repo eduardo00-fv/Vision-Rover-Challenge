@@ -13,7 +13,7 @@ class TelemetryClient {
   void poll();
   const WorldState& world() const;
   bool hasFreshWorld(uint32_t max_transport_age_ms) const;
-  bool connected() const;
+  bool connected();
 
   uint32_t validMessages() const { return valid_messages_; }
   uint32_t invalidMessages() const { return invalid_messages_; }
@@ -31,6 +31,8 @@ class TelemetryClient {
   WiFiClient socket_;
   char line_buffer_[LINE_BUFFER_SIZE];
   size_t line_length_ = 0;
+  bool discard_line_ = false;
+  bool new_session_ = true;
   uint32_t last_wifi_attempt_ms_ = 0;
   uint32_t last_tcp_attempt_ms_ = 0;
   uint32_t valid_messages_ = 0;
@@ -44,4 +46,3 @@ class TelemetryClient {
   void processLine();
   bool parseMessage(const char* line, WorldState& parsed);
 };
-

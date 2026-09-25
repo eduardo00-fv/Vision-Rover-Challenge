@@ -29,6 +29,8 @@ void vrc_assign(VrcGrid grid, VrcDepotSize depot_size, float cube_side_cells,
                 const VrcTaskRover* rovers, unsigned char rover_count, const VrcTaskCube* cubes,
                 unsigned char cube_count, const VrcTaskDepot* depots, unsigned char depot_count,
                 unsigned char* assigned) {
+  if (!assigned) return;
+  if (rover_count > 2 || cube_count > 3 || depot_count > 3) return;
   rover_logic::TaskRover core_rovers[2]; rover_logic::TaskCube core_cubes[3]; rover_logic::TaskDepot core_depots[3];
   for (unsigned char i = 0; i < rover_count && i < 2; ++i) core_rovers[i] = {rovers[i].id, {rovers[i].pose.col, rovers[i].pose.row, rovers[i].pose.theta_deg}, rovers[i].age_ms};
   for (unsigned char i = 0; i < cube_count && i < 3; ++i) core_cubes[i] = {static_cast<rover_logic::Color>(cubes[i].color), {{cubes[i].cube.position.col, cubes[i].cube.position.row}, cubes[i].cube.age_ms}};

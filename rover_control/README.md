@@ -3,26 +3,72 @@
 Base de control para cada CenfoBot. Esta primera entrega implementa:
 
 - Conexión Wi‑Fi al hotspot de visión.
-- Cliente TCP no bloqueante al puerto oficial `2026`.
+- Cliente TCP al puerto oficial `2026`, lectura acotada por vuelta y conexión
+  con timeout de 50 ms (motores detenidos antes de reconectar).
 - Reconstrucción de NDJSON: una línea JSON por mensaje.
 - Validación de telemetría v2 y actualización atómica de `WorldState`.
 - Control diferencial de los motores N20, sin encoders.
-- Navegación visual en lazo cerrado: cada PWM se recalcula desde la pose fresca
-  de la cámara, sin integrar distancia local.
-- Lectura de cuatro sensores de línea, ultrasónico y color reflectivo.
+- Navegación visual por maniobras cortas con control local de rumbo por IMU.
+- Lectura de cuatro sensores de línea; sonar/color deshabilitados por defecto.
 - FSM mínima que entra en parada segura con visión vieja, pose propia vencida o
   ronda finalizada.
 
-El control físico todavía requiere calibrar sentido de ruedas, PWM mínimo y
-márgenes de aproximación en ambos rovers antes de usarlo en una ronda.
+La calibración inicial de movimiento del rover 1 está cerrada. El rover 2 tiene
+un [sketch guiado](calibracion_rover2/README.md) preparado para probar después.
+El firmware autónomo y el diagnóstico comparten lector LSM6DS3TR-C, PD y
+perfil de giros. `motion/arena_motion.h` integra estos módulos con la visión y
+las paradas. El perfil del rover 2 permanece bloqueado por falta de calibración.
+Prioridades y pendientes: [plan actual](../PLAN_ACTUAL.md).
+
+## Primera integración para arena
+
+Seleccionar `VRC_PHYSICAL_ROVER 1` en `config.h`, además del marcador real en
+`ROVER_ID`: son identificaciones distintas. Un archivo de configuración antiguo
+sin selección física queda bloqueado. Mantener el robot quieto al encender:
+el cero IMU recoge 200 muestras tras 250 ms de estabilización, con motores
+detenidos. Si falla, corregir la causa y reiniciar; no se recalibra en movimiento.
+
+La visión elige objetivo y error angular. Para errores mayores de 10° se usa
+un giro relativo con el perfil probado; para el resto, avance de hasta 350 ms
+con bases 18/20 y PD 0,8/0,08, limitado a 4 puntos PWM. Cada maniobra termina
+con 500 ms de reposo y espera de una captura nueva. Es una primera navegación
+con pausas, pendiente de validación física; no estima distancia con la IMU ni
+fusiona orientaciones absolutas. Los parámetros visuales de velocidad no
+determinan el PWM de este controlador físico. El empuje usa también 18/20:
+su capacidad con carga todavía debe probarse.
+
+El permiso de visión se comprueba en cada vuelta, también durante los giros.
+IMU sin muestras durante más de 100 ms, error de lectura, giro atascado o timeout
+de giro enclavan una parada hasta reiniciar. `!` por serial también enclava
+la parada. No hace falta enviar comandos serial para ejecutar la misión.
+La protección IR de borde sigue deshabilitada hasta confirmar posición y
+polaridad; las primeras pruebas deben ser supervisadas en el centro de la arena.
+Sonar y color siguen pospuestos (`VRC_ENABLE_SONAR/COLOR 0`).
+
+Pruebas sin placa, incluyendo `setup()`/`loop()` reales con periféricos simulados:
+
+```sh
+bash rover_control/tests/run_arena.sh /ruta/ArduinoJson/src
+```
 
 ## Preparación
+
+Para comprobar solamente la red, definir `VRC_NETWORK_ONLY 1` en `config.h`.
+Recibe y valida telemetría sin inicializar la IMU ni permitir movimiento,
+incluso si llega `RUNNING`. No se puede combinar con el banco de motores.
+La laptop puede conservar internet por Wi-Fi y servir la visión por Ethernet:
+`VISION_HOST` debe ser la IP Ethernet, y el rover debe conectarse al Wi-Fi
+del router de esa misma LAN (sin aislamiento entre clientes y Ethernet).
+La IP obtenida por DHCP debe comprobarse antes de cada sesión.
+Para probar transporte sin cámara, ejecutar el publicador oficial con
+`python3 vision-system/contrato/mock_publisher.py --host <IP-Ethernet>`.
+Esta prueba comprueba recepción, no visión real ni navegación física.
 
 1. Instalar **esp32 by Espressif Systems** en Arduino IDE.
 2. Instalar las bibliotecas **ArduinoJson** y **FastLED** desde el administrador
    de bibliotecas.
 3. Copiar `config.example.h` como `config.h`.
-4. Configurar el hotspot, IP de la laptop y `ROVER_ID` (`10` o `11`).
+4. Configurar hotspot, IP, marcador real `ROVER_ID` y `VRC_PHYSICAL_ROVER`.
 5. Abrir `rover_control.ino`, elegir la placa/puerto del IdeaBoard y cargar.
 
 `config.h` está ignorado por Git para no guardar contraseñas ni la configuración
@@ -47,8 +93,11 @@ movimiento.
 [`rover_logic_core.h`](rover_logic_core.h) y
 [`rover_logic_core.cpp`](rover_logic_core.cpp) contienen la geometría de
 aproximación/empuje y el criterio de entrega sin depender de Arduino, Wi-Fi ni
-Webots. Es la pieza que se reutilizará en el controlador de simulación y que el
-adaptador del firmware consumirá después. La regla de depósito usa la media
+Webots. Ambos adaptadores consumen esa geometría, la asignación automática de
+tareas y la cesión de paso por prioridad de ID a menos de 200 mm. Esto no es
+un planificador de rutas ni garantiza evitar colisiones o bloqueos. Webots usa
+los parámetros de navegación predeterminados; los ajustes físicos del firmware
+todavía deben trasladarse y calibrarse en el simulador. La regla de depósito usa la media
 diagonal del cubo, igual que el contrato v2.
 
 Se puede verificar sin placa ni IDE:
@@ -64,13 +113,16 @@ g++ -std=c++17 rover_logic_core.cpp tests/test_rover_logic_core.cpp -o /tmp/test
 | --- | --- |
 | Motor izquierdo | M1 interno: 12 / 14 |
 | Motor derecho | M2 interno: 13 / 15 |
-| Línea (frente izq., frente der., atrás izq., atrás der.) | 36, 39, 34, 35 |
-| Ultrasónico | TRIG 25, ECHO 26 |
-| Color reflectivo | NeoPixel iluminador 4, analógico 32 |
+| IR S1, S2, S3, S4 (lectura digital) | 4, 5, 18, 19 |
+| Ultrasónico | TRIG 27, ECHO 33 |
+| Color reflectivo | NeoPixel DI 23, analógico A0 32 |
 
 El pin `ECHO` de un HC-SR04 típico es de 5 V: use un divisor de voltaje antes
-de GPIO26, que es de 3.3 V. Antes de cargar cada rover, ajuste `ROVER_ID`,
-`ROVER_TARGET_COLOR` y los cuatro umbrales de línea en `config.h`.
+de GPIO33, que es de 3.3 V. Antes de cargar cada rover, ajuste `ROVER_ID`
+y el sentido de motores en `config.h`. La asignación de cubos es automática. `hardware_config.h`
+incluye esa configuración en cada módulo C++, no solo en el sketch.
+Los IR se leen digitalmente: GPIO19 no tiene ADC. La polaridad debe medirse;
+la parada por línea sigue deshabilitada hasta validar su uso en la cuadrícula.
 
 ### Contrato de visión que consume
 
@@ -125,6 +177,7 @@ escribir `ARM` en el monitor serial. Cada orden queda limitada a ±35 % PWM y
 ```text
 ARM
 MOTOR 20 20 300      # avance breve
+ARM
 MOTOR 20 -20 300     # giro breve
 STOP
 DISARM
@@ -136,6 +189,17 @@ con visión.
 
 ## Regla de seguridad actual
 
-Fuera del modo de banco, el programa conserva `SAFE_STOP`: si no hay una foto
-válida de visión de menos de 1500 ms, si el rover propio no aparece o si la
-ronda terminó, los motores se detienen.
+Fuera del modo de banco, se corta movimiento ante desconexión, foto inválida,
+foto recibida hace más de 1500 ms, pose propia vencida o fase distinta de RUNNING.
+La edad efectiva de pose/cubo suma `age_ms` y el tiempo local desde recepción.
+Las publicaciones que repiten una captura no renuevan ese instante.
+No se presume sincronización entre el reloj UNIX de visión y `millis()`:
+todavía no se mide el retraso absoluto de transporte de la primera captura.
+El corte se evalúa cooperativamente; no constituye un watchdog independiente
+del microcontrolador. Antes de reconectar TCP se apagan los motores.
+
+Prueba de regresión en la laptop (usa ArduinoJson instalado, sin placa):
+
+```bash
+bash rover_control/tests/run_firmware_safety.sh /ruta/Arduino/libraries/ArduinoJson/src
+```

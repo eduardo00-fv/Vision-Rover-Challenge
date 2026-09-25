@@ -5,11 +5,6 @@
 #include "hardware_config.h"
 
 namespace {
-constexpr uint8_t LINE_PINS[4] = {36, 39, 34, 35};
-constexpr uint8_t SONAR_TRIG_PIN = 25;
-constexpr uint8_t SONAR_ECHO_PIN = 26;
-constexpr uint8_t COLOR_LED_PIN = 4;
-constexpr uint8_t COLOR_SENSOR_PIN = 32;
 constexpr uint32_t LINE_PERIOD_MS = 25;
 constexpr uint32_t SONAR_PERIOD_MS = 100;
 constexpr uint32_t COLOR_SETTLE_MS = 25;
@@ -17,8 +12,8 @@ constexpr uint32_t SONAR_TIMEOUT_US = 12000;
 
 CRGB color_led[1];
 
-bool activeLine(uint16_t value, uint16_t threshold) {
-  return LINE_BLACK_IS_LOW ? value < threshold : value > threshold;
+bool activeLine(uint16_t value) {
+  return LINE_BLACK_IS_LOW ? value == LOW : value == HIGH;
 }
 
 void setColorLed(const CRGB& color) {
@@ -30,23 +25,25 @@ void setColorLed(const CRGB& color) {
 void Sensors::begin() {
   for (uint8_t pin : LINE_PINS) {
     pinMode(pin, INPUT);
-    analogSetPinAttenuation(pin, ADC_11db);
   }
+#if VRC_ENABLE_COLOR
   pinMode(COLOR_SENSOR_PIN, INPUT);
   analogSetPinAttenuation(COLOR_SENSOR_PIN, ADC_11db);
+  FastLED.addLeds<WS2812, COLOR_LED_PIN, GRB>(color_led, 1);
+  setColorLed(CRGB::Black);
+#endif
+#if VRC_ENABLE_SONAR
   pinMode(SONAR_TRIG_PIN, OUTPUT);
   pinMode(SONAR_ECHO_PIN, INPUT);
   digitalWrite(SONAR_TRIG_PIN, LOW);
-
-  FastLED.addLeds<WS2812, COLOR_LED_PIN, GRB>(color_led, 1);
-  setColorLed(CRGB::Black);
-  Serial.println("[sensores] linea, sonar y color listos");
+#endif
+  Serial.println("[sensores] IR listos; sonar/color segun configuracion");
 }
 
 void Sensors::sampleLines() {
   for (uint8_t i = 0; i < 4; ++i) {
-    snapshot_.line[i] = analogRead(LINE_PINS[i]);
-    snapshot_.line_active[i] = activeLine(snapshot_.line[i], LINE_THRESHOLDS[i]);
+    snapshot_.line[i] = digitalRead(LINE_PINS[i]);
+    snapshot_.line_active[i] = activeLine(snapshot_.line[i]);
   }
 }
 
@@ -101,11 +98,11 @@ void Sensors::poll() {
     last_line_ms_ = now;
     sampleLines();
   }
-  if (now - last_sonar_ms_ >= SONAR_PERIOD_MS) {
+  if (VRC_ENABLE_SONAR && now - last_sonar_ms_ >= SONAR_PERIOD_MS) {
     last_sonar_ms_ = now;
     sampleSonar();
   }
-  pollColor();
+  if (VRC_ENABLE_COLOR) pollColor();
 }
 
 bool Sensors::boundaryDetected() const {

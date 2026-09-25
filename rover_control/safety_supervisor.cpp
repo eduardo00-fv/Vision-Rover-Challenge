@@ -9,7 +9,8 @@ SafetyDecision SafetySupervisor::evaluate(const WorldState& world, uint8_t rover
   if (rover == nullptr) {
     return {false, SafetyReason::ROVER_NOT_VISIBLE};
   }
-  if (rover->age_ms > max_pose_age_ms) return {false, SafetyReason::ROVER_POSE_STALE};
+  if (static_cast<uint64_t>(rover->age_ms) + (millis() - world.received_at_ms) > max_pose_age_ms)
+    return {false, SafetyReason::ROVER_POSE_STALE};
   if (world.phase == RoundPhase::FINISHED) return {false, SafetyReason::ROUND_FINISHED};
   if (world.phase == RoundPhase::UNKNOWN) return {false, SafetyReason::UNKNOWN_PHASE};
   return {world.phase == RoundPhase::RUNNING, SafetyReason::OK};
