@@ -36,6 +36,10 @@
 #define MOTOR_RIGHT_REVERSED false
 #endif
 
+// Puerto de la laptop donde escucha la consola del banco por Wi-Fi.
+#ifndef BENCH_PORT
+#define BENCH_PORT 2027
+#endif
 #ifndef VRC_ENABLE_MOTOR_BENCH
 #define VRC_ENABLE_MOTOR_BENCH 0
 #endif

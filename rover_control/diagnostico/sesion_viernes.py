@@ -275,6 +275,71 @@ class Rover:
             s.close()
 
 
+class RoverWifi(Rover):
+    """Consola del banco por Wi-Fi: el rover se conecta a esta laptop en BENCH_PORT."""
+
+    def __init__(self, log: Path, puerto_tcp: int = 2027):
+        super().__init__(None, log)
+        self.sock = None
+        self._srv = socket.create_server(("0.0.0.0", puerto_tcp), reuse_port=True)
+        self._srv.settimeout(1.0)
+        self._fin = threading.Event()
+        threading.Thread(target=self._aceptar, daemon=True).start()
+
+    def conectado(self) -> bool:
+        return self.sock is not None
+
+    def _aceptar(self) -> None:
+        while not self._fin.is_set():
+            try:
+                conn, addr = self._srv.accept()
+            except (socket.timeout, OSError):
+                continue
+            conn.settimeout(0.2)
+            conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            self.log.write(f"{time.time():.3f} !! rover conectado desde {addr[0]}\n")
+            self.sock = conn
+            pendiente_ = b""
+            while not self._fin.is_set():
+                try:
+                    bloque = conn.recv(512)
+                except socket.timeout:
+                    continue
+                except OSError:
+                    bloque = b""
+                if not bloque:
+                    break
+                pendiente_ += bloque
+                *lineas, pendiente_ = pendiente_.split(b"\n")
+                for l in lineas:
+                    texto = l.decode("utf-8", "replace").rstrip()
+                    self.lineas.append(texto)
+                    self.log.write(f"{time.time():.3f} < {texto}\n")
+            self.sock = None
+            self.log.write(f"{time.time():.3f} !! rover desconectado\n")
+            conn.close()
+
+    def enviar(self, linea: str) -> None:
+        self.log.write(f"{time.time():.3f} > {linea}\n")
+        s = self.sock
+        if s is None:
+            raise Abortar("el rover no está conectado por Wi-Fi (¿encendido? ¿misma red?)")
+        s.sendall(linea.encode() + b"\n")
+
+    def parar(self) -> None:
+        s = self.sock
+        if s:
+            try:
+                s.sendall(b"!\n")
+            except OSError:
+                pass
+
+    def cerrar(self) -> None:
+        self.parar()
+        self._fin.set()
+        self._srv.close()
+
+
 # ---------------------------------------------------------------- firmware
 
 def ip_vision() -> str:
@@ -384,31 +449,31 @@ class Sesion:
             time.sleep(1)
 
     def firmware(self, modo: str, ritmo=None) -> None:
+        """Carga por USB (si hace falta) y después se trabaja sin cable."""
         clave = f"{modo}:{ritmo}"
         if self.modo_cargado == clave:
             return
-        if self.rover:
-            self.rover.cerrar()
-            self.rover = None
         self.conectar_vision()
-        puerto = self.args.puerto or puerto_usb()
         if not self.args.no_cargar:
+            puerto = self.args.puerto or puerto_usb()
             preparar(modo, self.args.ip or ip_vision(), self.marcador, puerto, ritmo)
-        print("[firmware] el rover se reinicia: no lo muevas unos segundos (cero de la IMU)")
-        self.rover = Rover(puerto, self.dir / "serie.log")
+            pedir("Firmware cargado. Desconectá el USB (el rover sigue encendido con la batería) "
+                  "y dejalo quieto unos segundos")
         self.modo_cargado = clave
-        if modo == "banco":
-            if not self.rover.esperar(r"\[banco\] escriba HELP", 8):
-                self.rover.enviar("HELP")
-                if not self.rover.esperar(r"\[banco\]", 3):
-                    raise Abortar(f"el rover no respondió como firmware de banco por {puerto}")
+        if modo != "banco":
+            if self.rover:
+                self.rover.cerrar()
+            self.rover = Rover(None, self.dir / "serie.log")  # sin consola: `stop` en la visión lo frena
             return
-        if not self.rover.esperar(r"\[estado\] wifi=ok tcp=ok", 40):
-            ultimo = next((l for l in reversed(self.rover.lineas) if "[estado]" in l), "sin líneas [estado]")
-            raise Abortar(f"el rover no se conectó a la visión ({ultimo}). Revisá Wi-Fi de config.h "
-                          f"y que esta máquina tenga la IP grabada")
-        imu = self.rover.esperar(r"\[movimiento\].*imu=", 5)
-        print(f"[firmware] rover conectado a la visión; {imu or ''}")
+        if not isinstance(self.rover, RoverWifi):
+            self.rover = RoverWifi(self.dir / "serie.log")
+        print("[banco] esperando que el rover se conecte por Wi-Fi…")
+        limite = time.monotonic() + 45
+        while not self.rover.conectado() and time.monotonic() < limite:
+            time.sleep(0.2)
+        if not self.rover.conectado():
+            raise Abortar("el rover no se conectó por Wi-Fi en 45 s: revisá que esté encendido y en 'Atta-Bot'")
+        print("[banco] rover conectado por Wi-Fi")
 
     def pose(self) -> dict:
         while True:
@@ -593,8 +658,7 @@ class Sesion:
         pendientes = [c for c in ("1", "2", "3", "4", "6") if not any(k.startswith(c + ":") for k in self.estado)]
         if self.args.repetir or pendientes:
             self.firmware("banco")
-            pedir("Firmware de banco cargado. Rover en el centro de la cancha, sin cubos cerca, "
-                  "cable USB con holgura para que no tire")
+            pedir("Rover en el centro de la cancha, sin cubos cerca")
             print("[prueba] paro de emergencia: ARM + MOTOR 18 20 1500 y a los 0,4 s se manda `!`")
             t0 = time.time()
             self.orden_con_paro()
@@ -629,7 +693,8 @@ class Sesion:
                     continue
                 self.firmware("autonomo", valores)
                 pedir(f"Prueba 7, ritmo {nombre}, ronda {i}/{self.args.rondas}: rover en la salida y UN cubo "
-                      "en la misma posición de siempre. En la terminal de la visión apretá `r`")
+                      "en la misma posición de siempre. En la terminal de la visión apretá `r` "
+                      "(para frenarlo en cualquier momento: `stop` en la visión)")
                 self.guardar(clave, self.una_ronda(f"p7_{nombre.replace('/', '_')}_{i}.csv"))
                 r = self.estado[clave]
                 print(f"    7) {nombre} #{i}: {r['tiempo_s'] or math.nan:.1f} s, "
