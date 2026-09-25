@@ -4,7 +4,19 @@ Objetivo: reemplazar los supuestos del simulador por números medidos y
 decidir cuánto se puede acelerar. Cada prueba dice qué valor ajusta.
 Orden = prioridad: si el tiempo no alcanza, se cortan las últimas.
 
-**Antes de empezar**
+**Modo asistido (recomendado).** Con la visión corriendo en esta laptop y el
+rover 1 por USB:
+
+    python3 rover_control/diagnostico/sesion_viernes.py
+
+Detecta IP, puerto y marcador; carga el firmware de banco, prueba `!`, corre
+1→4 y 6 (y calcula 5), carga el autónomo y corre la 7 con los dos ritmos (3
+rondas cada uno). Solo pide lo físico (cubo en las paletas, reubicar, `r` en
+la visión). Ctrl+C detiene el rover; al volver a correrlo sigue donde quedó.
+Todo queda en `diagnostico/sesiones/<fecha>/RESULTADOS.md` con las tablas de
+abajo llenas. 8, 9 y 10 siguen siendo manuales.
+
+**Antes de empezar (modo manual)**
 
 - [ ] Visión corriendo y cancha calibrada; `!` por serie detiene al rover (probarlo primero).
 - [ ] En la PC de visión, un registro por prueba, con un nombre de archivo por prueba:

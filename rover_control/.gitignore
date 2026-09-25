@@ -5,3 +5,8 @@ config.h
 # Simulador 2D: firmware compilado por rover y trazas.
 sim/build/
 __pycache__/
+
+# Copia de config.h que guarda sesion_viernes.py (tiene credenciales).
+config.h.orig
+# Datos crudos de las sesiones en la arena.
+diagnostico/sesiones/*/*.csv
