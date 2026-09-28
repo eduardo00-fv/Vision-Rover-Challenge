@@ -20,3 +20,14 @@ g++ -std=c++17 -I"$source_dir/tests/host" "$source_dir/tests/test_start_button.c
 "$test_stage/test_start_button"
 g++ -std=c++17 -Wall "$source_dir/tests/test_line_guard.cpp" -o "$test_stage/test_line_guard"
 "$test_stage/test_line_guard"
+# Compilación de competencia: debe rechazar banco, solo-red y botón.
+competition_check() {
+  echo '#include "hardware_config.h"' | g++ -std=c++17 -fsyntax-only -x c++ -I"$source_dir/tests/host" \
+    -I"$test_stage" -DVRC_COMPETITION=1 -DVRC_PHYSICAL_ROVER=1 "$@" - 2>/dev/null
+}
+competition_check
+for bad in VRC_ENABLE_MOTOR_BENCH VRC_NETWORK_ONLY VRC_REQUIRE_START_BUTTON; do
+  if competition_check -D"$bad"=1; then echo "Competencia aceptó $bad=1" >&2; exit 1; fi
+done
+if competition_check -UVRC_PHYSICAL_ROVER -DVRC_PHYSICAL_ROVER=0; then echo "Competencia aceptó perfil 0" >&2; exit 1; fi
+echo "Competition build checks passed"

@@ -160,3 +160,24 @@ static_assert(!LINE_STOP_ON_DETECTION || (LINE_FRONT_MASK | LINE_REAR_MASK) != 0
 #ifndef ULTRASONIC_STOP_CM
 #define ULTRASONIC_STOP_CM 10.0F
 #endif
+
+// Compilación de competencia (reglamento §6.3, §9.6, §11.2, §26.2.6): con 1 no
+// compila nada que permita control externo, bloquee el arranque automático o
+// deje al rover sin perfil de movimiento. Poner en config.h antes de cada ronda.
+#ifndef VRC_COMPETITION
+#define VRC_COMPETITION 0
+#endif
+#if VRC_COMPETITION
+#if VRC_ENABLE_MOTOR_BENCH
+#error "Competencia: VRC_ENABLE_MOTOR_BENCH debe ser 0 (consola de motores = control remoto)"
+#endif
+#if VRC_NETWORK_ONLY
+#error "Competencia: VRC_NETWORK_ONLY debe ser 0 (el rover no se movería)"
+#endif
+#if VRC_REQUIRE_START_BUTTON
+#error "Competencia: VRC_REQUIRE_START_BUTTON debe ser 0 (el arranque es automático)"
+#endif
+#if VRC_PHYSICAL_ROVER != 1 && VRC_PHYSICAL_ROVER != 2
+#error "Competencia: VRC_PHYSICAL_ROVER debe ser 1 o 2"
+#endif
+#endif

@@ -26,6 +26,10 @@ constexpr uint8_t ROVER_ID = 10;
 // Por seguridad cada orden está limitada a ±35% PWM y 1500 ms.
 #define VRC_ENABLE_MOTOR_BENCH 0
 
+// Para una ronda oficial: 1 hace fallar la compilación si queda activo el
+// banco, la prueba solo-red o el botón de arranque (hardware_config.h).
+#define VRC_COMPETITION 0
+
 // IR S1..S4: GPIO4/5/18/19. Lectura digital (GPIO19 no tiene ADC).
 // La cancha es un tablero de ajedrez: negro NO es borde. El borde se detecta
 // por recorrido sin cambio de color (line_guard.h). Habilitar solo con las

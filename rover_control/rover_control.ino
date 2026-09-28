@@ -240,6 +240,10 @@ void setup() {
   Serial.begin(115200);
   delay(200);
   Serial.printf("\nVision Rover Control | rover %u\n", ROVER_ID);
+  // Para mostrarle al juez qué se compiló: sin banco ni botón, arranque en RUNNING.
+  Serial.printf("[config] competencia=%d perfil=%d banco=%d solo_red=%d boton=%d espnow=%d borde_ir=%d\n",
+                VRC_COMPETITION, VRC_PHYSICAL_ROVER, VRC_ENABLE_MOTOR_BENCH, VRC_NETWORK_ONLY,
+                VRC_REQUIRE_START_BUTTON, VRC_ENABLE_ESPNOW, LINE_STOP_ON_DETECTION);
   motors.begin();
 #if VRC_ENABLE_MOTOR_BENCH
   Serial.println("[banco] MODO BANCO ACTIVO: no ejecuta misión");
